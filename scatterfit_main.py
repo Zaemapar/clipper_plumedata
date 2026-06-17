@@ -9,27 +9,23 @@ import csv
 import matplotlib.pyplot as plt
 import PyMieScatt as PyMie
 import utils
-import vars
+import fit_vars as vars
 import os
 import sys
 
 if __name__ == "__main__":
-    # Program takes one extra argument: which model to use
-    args = sys.argv
-    if len(args) != 2:
-        raise RuntimeError("""Usage: python3 {os.path.basename(__file__)} <theory>
-                           Example: python3 {os.path.basename(__file__)} mie
-                           Arguments:
-                           \t<theory> Which theory to use to estimate data. Takes either mie for Mie theory or hg for a Henyey-Greenstein function.""")
-    if args[1] == "mie":
+    # Read which model to use
+    if data.MODEL == "mie":
         use_mie = True
-    elif args[1] == "hg":
+    elif data.MODEL == "hg":
         use_mie = False
+    else:
+        raise RuntimeError("MODEL should be either mie (for Mie scattering theory) or hg (for Henyey-Greenstein function)")
 
     graph_dir = utils.create_dirpath("scatterfit_main")
 
     # Extract original angles and reflectances from data path
-    theta1_orig, reflectances_orig = utils.get_angle_data(vars.DATA_PATH)
+    theta1_orig, reflectances_orig = utils.get_data(vars.DATA_PATH)
 
     # Sort and zip in case of scrambled values
     sorted_pairs = sorted(zip(theta1_orig, reflectances_orig))
@@ -58,21 +54,19 @@ if __name__ == "__main__":
     valid_angles = theta1_rad[valid_tests]
     valid_reflectances = reflectances[valid_tests]
 
-    # --- MIE MODEL ---
-    if use_mie:
+    # --- MIE ANGLE MODEL ---
+    if use_mie and vars.ALTITUDE is None:
         # Mie function handling arguments, used in curve fitting
         def mie_iterator(thetas, smin, smax, powlaw):
             # Reject invalid size combinations
             if smin > smax:
                 return np.full_like(thetas, 1e10)
             # Compute reflectances based on constant min_theta, max_theta, m, and valid reflectances
-            # thetas is not used because angle_mie_reflectances recreates it through SF_SD.
-            # This cannot be avoided.
             reflectances, _ = utils.angle_mie_reflectances(smin, smax, powlaw, m, valid_reflectances, min_theta, max_theta)
             return np.log10(reflectances) # Fit will be done to log scale
 
         # Obtain the optical constants at the desired wavelength
-        n,k=utils.get_nk(WAVEL, COMP)
+        n,k=utils.get_nk(vars.WAVEL, vars.COMP)
 
         # Compute the reflectance (I/F) of the particle population.
         # Note this uses the same normalization process as described in Appendix B of
@@ -81,9 +75,9 @@ if __name__ == "__main__":
         m = complex(n, k) # Compute complex refractive index
 
         # Provide initial guesses and bounds (with slight asymmetry to avoid singular jacobian)
-        p0 = [S_MIN + (S_MAX-S_MIN)/3, S_MIN + (S_MAX-S_MIN)/2, POWLAW_MIN + (POWLAW_MAX-POWLAW_MIN)/4]
-        bounds = ([S_MIN, S_MIN, POWLAW_MIN], 
-                [S_MAX, S_MAX, POWLAW_MAX])
+        p0 = [vars.S_MIN + (vars.S_MAX-vars.S_MIN)/3, vars.S_MIN + (vars.S_MAX-vars.S_MIN)/2, vars.POWLAW_MIN + (vars.POWLAW_MAX-vars.POWLAW_MIN)/4]
+        bounds = ([vars.S_MIN, vars.S_MIN, vars.POWLAW_MIN], 
+                [vars.S_MAX, vars.S_MAX, vars.POWLAW_MAX])
 
         try:
             # Fit in log space so the tail isn't ignored
@@ -95,7 +89,7 @@ if __name__ == "__main__":
                 bounds=bounds,
                 maxfev=10000,
                 diff_step=0.1, # If too small, optimization fails to progress due to noise in Mie
-                x_scale=[S_MAX, S_MAX, POWLAW_MAX] # Help the optimizer understand the scale
+                x_scale=[vars.S_MAX, vars.S_MAX, vars.POWLAW_MAX] # Help the optimizer understand the scale
             )
             params = popt.tolist()
         except Exception as e:
@@ -112,11 +106,11 @@ if __name__ == "__main__":
         print(f"Done\nOptimized distribution:\nsmin={params[0]}\nsmax={params[1]}\npowlaw={params[2]}\ntau={params[3]}")
 
         # Generate a plot of reflectances vs wavelengths for these parameters
-        wavels = np.arange(MIN_WAVEL_TEST, MAX_WAVEL_TEST + WAVEL_STEP, WAVEL_STEP)
-        utils.wavel_plot(graph_dir, wavels, params, theta1, reflectances)
+        wavels = np.arange(vars.MIN_WAVEL_TEST, vars.MAX_WAVEL_TEST + vars.WAVEL_STEP, vars.WAVEL_STEP)
+        utils.wavel_plot(graph_dir, wavels, params)
 
-    # --- HENYEY-GREENSTEIN MODEL ---
-    else:
+    # --- HENYEY-GREENSTEIN ANGLE MODEL ---
+    elif not use_mie and vars.ALTITUDE is None:
         # Henyey-Greenstein function handling arguments, used in curve fitting
         def hg_model(angle, w1, g1, w2, g2):
             # Mainly just reformatting input parameters

@@ -4,21 +4,22 @@ import scipy.optimize
 import csv
 import matplotlib.pyplot as plt
 import PyMieScatt as PyMie
-import vars
+import fit_vars as vars
 import os
 import sys
 
-def wb08read():
+def wb08read(data_path):
     """
     Extracts information on complex index of refraction from provided datasheets for a given material.
 
+    :param data_path: String file path for index of refraction data
     :returns: Numpy array for given wavelength,
               Numpy array for n values (refractive indices) at each wavelength,
               Numpy array for k values (absorbtion coefficients) at each wavelength
     """
     wavew, nw, kw, temp = [], [], [], []
 
-    with open('data/WB08_Iceconstants.csv', 'r') as f:
+    with open(data_path, 'r') as f:
         reader = csv.reader(f)
         next(reader) # Skip header row
         #line=line.strip(',')
@@ -45,8 +46,12 @@ def get_nk(wavel,comp):
               Float k (absorption coefficient) at the given wavelength
     """
     if comp == 'Water Ice':
-        # Calling function to read appropriate tables of optical constants for water ice
-        wavex,nx,kx=wb08read()
+        idx_refraction_path = "data/WB08_Iceconstants.csv"
+    else:
+        raise FileNotFoundError("Material type not supported.")
+    
+    # Calling function to read appropriate tables of optical constants for water ice
+    wavex,nx,kx=wb08read(idx_refraction_path)
     
     # Interpolate to given wavelength
     nxfunc=sp.interpolate.interp1d(wavex,nx)
@@ -55,14 +60,15 @@ def get_nk(wavel,comp):
     k=kxfunc(wavel)
     return n,k
 
-def get_angle_data(src):
+def get_data(src, altitude=None):
     """
-    Reads data from a given sample and extracts scattering angle and corresponding I/F reflectance.
+    Reads data from a given sample and extracts scattering angle (or wavelength) and corresponding I/F reflectance (or optical depth tau).
     Parses header using string search to determine how to format the data.
 
     :param src: String path to data file
-    :returns: Array for theta values,
-              Array for corresponding reflectance values
+    :param altitude: Float altitude if reading wavelength data
+    :returns: Array for theta/wavelength values,
+              Array for corresponding reflectance/tau values
     """
     # Empty arrays for data
     thetas = []
@@ -77,19 +83,24 @@ def get_angle_data(src):
         reflectance_idx = 0
         phase_theta = False
         if_scale_factor = 0
-        for idx, headstring in enumerate(header):
-            lc_headstring = headstring.lower()
-            # Check to see if it's an angle column
-            if ("theta" in lc_headstring or "angle" in lc_headstring) and "range" not in lc_headstring:
-                theta_idx = idx
-                if "phase" in lc_headstring:
-                    phase_theta = True
-            # Check to see if it's a reflectance column
-            elif "reflect" in lc_headstring or "contr" in lc_headstring:
-                reflectance_idx = idx
-                modifier_idx = lc_headstring.find("10^")
-                if modifier_idx > 0:
-                    if_scale_factor = int(lc_headstring[(modifier_idx + 3):])
+        if altitude is not None:
+            theta_idx = 0 # Wavelengths are always listed in the left column
+            reflectance_idx = np.where(np.asarray(header) == str(altitude))[0]
+            if_scale_factor = -2 # Equivalent width is usually listed in those tables, to convert to tau divide by 100
+        else:
+            for idx, headstring in enumerate(header):
+                lc_headstring = headstring.lower()
+                # Check to see if it's an angle column
+                if ("theta" in lc_headstring or "angle" in lc_headstring) and "range" not in lc_headstring:
+                    theta_idx = idx
+                    if "phase" in lc_headstring:
+                        phase_theta = True
+                # Check to see if it's a reflectance column
+                elif "reflect" in lc_headstring or "contr" in lc_headstring:
+                    reflectance_idx = idx
+                    modifier_idx = lc_headstring.find("10^")
+                    if modifier_idx > 0:
+                        if_scale_factor = int(lc_headstring[(modifier_idx + 3):])
 
         # Iterate through each line in the rest of the document
         for line in reader:
@@ -326,7 +337,7 @@ def mkplt(folder, theta, if_orig, if_fit, params, use_mie):
     plt.savefig(fig_path)
     print(f"\nGraph fit saved to {fig_path}")
 
-def wavel_plot(folder, wavels, params, angles, given_ifs, angle=vars.WAVEL_SNAPSHOT_ANGLE):
+def wavel_plot(folder, wavels, params, angle=vars.WAVEL_SNAPSHOT_ANGLE):
     """
     Plots and saves a graph of reflectances varied over different wavelenghts at a fixed scattering angle, 
     using the size distribution calculated with Mie theory. As only Mie theory is dependent on wavelength, 
@@ -335,18 +346,15 @@ def wavel_plot(folder, wavels, params, angles, given_ifs, angle=vars.WAVEL_SNAPS
     :param folder: String folder in which to save graph
     :param wavels: Array of wavelengths at which to extract reflectance data
     :param params: Array of particle distribution parameters calculated from Mie theory.
-    :param given_ifs: Array of original reflectances. Not used, but required by angle_mie_reflectances
     :param angle: Integer scattering angle at which to loop over wavelengths
     """
     reflectances = []
-    # Find the index of the given scattering angle
-    angle_idx = np.where(angles == angle)[0][0]
     for w in wavels:
         # Compute new complex index of refraction at each wavelength
-        n, k = get_nk(w, COMP)
+        n, k = get_nk(w, vars.COMP)
         m = complex(n, k)
         # Get reflectance at singular angle using given Mie parameters, passing existing tau
-        reflectance_wavel, _ = angle_mie_reflectances(params[0], params[1], params[2], m, [given_ifs[angle_idx]], angle, angle, theta_min=angle, theta_max=angle, wavel=w, tau=params[3])
+        reflectance_wavel, _ = angle_mie_reflectances(params[0], params[1], params[2], m, None, angle, angle, theta_min=angle, theta_max=angle, wavel=w, tau=params[3])
         reflectances.append(reflectance_wavel[0]) # Get first element of single-element array returned
 
     # Plot setup, plus a space for text to display parameters
@@ -369,3 +377,80 @@ def wavel_plot(folder, wavels, params, angles, given_ifs, angle=vars.WAVEL_SNAPS
     fig_path = os.path.join(folder, f"{vars.DATA_FILE[:-4]}_wavels_miefit.png")
     plt.savefig(fig_path)
     print(f"\nWavelength I/F plot saved to {fig_path}")
+
+def plt_angle(fig_path, theta, ifs, params, use_mie):
+    """
+    Plots and saves a graph of reflectances over various angles.
+    Displays parameters (particle size distribution for Mie, weights and asymmetry parameters for Henyey-Greenstein)
+    necessary to produce the displayed graph.
+
+    :param fig_path: String path to which to save graph, including image name
+    :param theta: Array of thetas in degrees, to be plotted along the x-axis
+    :param ifs: Array of reflectances
+    :param params: Array of parameters used to produce given plot
+    :param use_mie: Boolean for determining whether Mie or Henyey-Greenstein methods were used.
+    """
+    # Plot setup - using a log scale plot, plus a space for text to display parameters
+    fig, (iflogplt, txt) = plt.subplots(1, 2, figsize=(12, 8), layout='constrained')
+
+    # Plotting the given datasets
+    iflogplt.plot(theta, ifs, color='black', label=f'Reflectance')
+
+    # Cosmetic setup
+    iflogplt.set_xlabel('Scattering Angle (degrees)')
+    iflogplt.set_ylabel('Reflectance (I/F)')
+    iflogplt.set_title(f'{params[4]} Reflectance vs Scattering Angle at {params[5]:.3f} um')
+    iflogplt.grid()
+    iflogplt.set_yscale('log')
+    iflogplt.set_xscale('log')
+
+    # Fill in textbox with necessary parameters
+    if use_mie:
+        txt.text(0.25, 0.5, f"Mie Params:\nsmin={params[0]:.4f}\nsmax={params[1]:.4f}\npowlaw={params[2]:.4f}\ntau={params[3]:.2e}", bbox=dict(facecolor='lightblue', alpha=0.5, edgecolor='black', pad=10), fontsize=15)
+    else:
+        txt.text(0.25, 0.5, f"Henyey-Greenstein Params:\nw1={params[0]:.2f}\ng1={params[1]:.2f}\nw2={params[2]:.2f}\ng2={params[3]:.2f}\nwscale={params[4]:.2e}", bbox=dict(facecolor='lightblue', alpha=0.5, edgecolor='black', pad=10), fontsize=15)
+    
+    # Save to file
+    plt.savefig(fig_path)
+    print(f"Angle I/F plot saved to {fig_path}")
+
+def plt_wavel(fig_path, wavels, params, angle=vars.WAVEL_SNAPSHOT_ANGLE, composition=vars.COMP, sizes=vars.NSIZE):
+    """
+    Plots and saves a graph of reflectances varied over different wavelenghts at a fixed scattering angle, 
+    using the size distributions given. As only Mie theory is dependent on wavelength, 
+    this graph will only be generated if Mie theory is used.
+
+    :param fig_path: String path to which to save graph, including image name
+    :param wavels: Array of wavelengths at which to extract reflectance data
+    :param params: Array of particle distribution parameters calculated from Mie theory.
+    :param angle: Integer scattering angle at which to loop over wavelengths
+    :param comp: String composition of material (currently only 'Water Ice' is supported.)
+    :param nsize: Integer number of particle sizes to use (resolution)
+    """
+    reflectances = []
+    for w in wavels:
+        # Compute new complex index of refraction at each wavelength
+        n, k = get_nk(w, composition)
+        m = complex(n, k)
+        # Get reflectance at singular angle using given Mie parameters, passing existing tau
+        reflectance_wavel, _ = angle_mie_reflectances(params[0], params[1], params[2], m, None, angle, angle, theta_min=angle, theta_max=angle, wavel=w, nsize=sizes, tau=params[3])
+        reflectances.append(reflectance_wavel[0]) # Get first element of single-element array returned
+
+    # Plot setup, plus a space for text to display parameters
+    fig, (ifplt, txt) = plt.subplots(1, 2, figsize=(12, 8), layout='constrained')
+
+    # Plot the computed reflectances
+    ifplt.plot(wavels, reflectances, color='black', label=f'Computed Mie')
+
+    # Cosmetic setup
+    ifplt.set_xlabel('Wavelength (microns)')
+    ifplt.set_ylabel('Reflectance (I/F)')
+    ifplt.set_title(f'{params[4]} Reflectance vs Wavelength at {angle}° Scattering Angle')
+    ifplt.grid()
+
+    # Fill in textbox with necessary parameters
+    txt.text(0.25, 0.5, f"Mie Params:\nsmin={params[0]:.4f}\nsmax={params[1]:.4f}\npowlaw={params[2]:.4f}\ntau={params[3]:.2e}", bbox=dict(facecolor='lightblue', alpha=0.5, edgecolor='black', pad=10), fontsize=15)
+
+    # Save to file
+    plt.savefig(fig_path)
+    print(f"Wavelength I/F plot saved to {fig_path}")
