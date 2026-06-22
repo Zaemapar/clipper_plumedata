@@ -8,7 +8,7 @@ ALTITUDE = None # Set to an altitude value in km if you want to curve-fit to alt
 
 # Angle scan bounds. For use in fitting only, final plots will plot over all available theta
 ANGLE_LOWERBOUND = 1
-ANGLE_UPPERBOUND = 160
+ANGLE_UPPERBOUND = 166
 
 # MIE DEFAULT PARAMETERS
 # Min and max particle sizes to scan for in Mie distribution

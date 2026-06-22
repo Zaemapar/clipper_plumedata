@@ -15,9 +15,9 @@ import sys
 
 if __name__ == "__main__":
     # Read which model to use
-    if data.MODEL == "mie":
+    if vars.MODEL == "mie":
         use_mie = True
-    elif data.MODEL == "hg":
+    elif vars.MODEL == "hg":
         use_mie = False
     else:
         raise RuntimeError("MODEL should be either mie (for Mie scattering theory) or hg (for Henyey-Greenstein function)")
@@ -51,18 +51,23 @@ if __name__ == "__main__":
     theta1_rad = theta1 * np.pi / 180
 
     # Slice along valid indices
-    valid_angles = theta1_rad[valid_tests]
+    valid_rads = theta1_rad[valid_tests]
+    valid_degs = theta1[valid_tests]
     valid_reflectances = reflectances[valid_tests]
 
     # --- MIE ANGLE MODEL ---
     if use_mie and vars.ALTITUDE is None:
+        # Get reference reflectance, for use in calculating tau
+        ref_if_idx = np.where(theta1 == vars.ANGLE_LOWERBOUND)[0]
+        reflectance_ref = reflectances[ref_if_idx]
+
         # Mie function handling arguments, used in curve fitting
         def mie_iterator(thetas, smin, smax, powlaw):
             # Reject invalid size combinations
             if smin > smax:
-                return np.full_like(thetas, 1e10)
+                return np.full_like(thetas, np.nan)
             # Compute reflectances based on constant min_theta, max_theta, m, and valid reflectances
-            reflectances, _ = utils.angle_mie_reflectances(smin, smax, powlaw, m, valid_reflectances, min_theta, max_theta)
+            reflectances = utils.angle_mie_reflectances(smin, smax, powlaw, ref_if=reflectance_ref)[0][0]
             return np.log10(reflectances) # Fit will be done to log scale
 
         # Obtain the optical constants at the desired wavelength
@@ -75,7 +80,7 @@ if __name__ == "__main__":
         m = complex(n, k) # Compute complex refractive index
 
         # Provide initial guesses and bounds (with slight asymmetry to avoid singular jacobian)
-        p0 = [vars.S_MIN + (vars.S_MAX-vars.S_MIN)/3, vars.S_MIN + (vars.S_MAX-vars.S_MIN)/2, vars.POWLAW_MIN + (vars.POWLAW_MAX-vars.POWLAW_MIN)/4]
+        p0 = [vars.S_MIN + (vars.S_MAX-vars.S_MIN)/4, vars.S_MIN + (vars.S_MAX-vars.S_MIN)/3, vars.POWLAW_MIN + (vars.POWLAW_MAX-vars.POWLAW_MIN)/2]
         bounds = ([vars.S_MIN, vars.S_MIN, vars.POWLAW_MIN], 
                 [vars.S_MAX, vars.S_MAX, vars.POWLAW_MAX])
 
@@ -83,7 +88,7 @@ if __name__ == "__main__":
             # Fit in log space so the tail isn't ignored
             popt, _ = sp.optimize.curve_fit(
                 mie_iterator, 
-                valid_angles, 
+                valid_degs, 
                 np.log10(valid_reflectances), # Log of original dataset is being fit with log of best-fit dataset
                 p0=p0, 
                 bounds=bounds,
@@ -97,11 +102,11 @@ if __name__ == "__main__":
             params = p0
 
         # Retrieve the tau corresponding to the fitted parameters
-        _, optimal_tau = utils.angle_mie_reflectances(params[0], params[1], params[2], m, valid_reflectances, min_theta, max_theta)
+        optimal_tau = utils.angle_mie_reflectances(params[0], params[1], params[2], ref_if=reflectance_ref)[1][0][0]
         params.append(optimal_tau) # append to parameter list
 
         # Then get the full line across all angles
-        plt_reflectances, _ = utils.angle_mie_reflectances(params[0], params[1], params[2], m, reflectances, min_theta, max_theta, theta_min=theta1[0], theta_max=theta1[-1], tau=optimal_tau)
+        plt_reflectances = utils.angle_mie_reflectances(params[0], params[1], params[2], theta_min=theta1[0], theta_max=theta1[-1], tau=optimal_tau)[0][0]
 
         print(f"Done\nOptimized distribution:\nsmin={params[0]}\nsmax={params[1]}\npowlaw={params[2]}\ntau={params[3]}")
 
@@ -125,7 +130,7 @@ if __name__ == "__main__":
             # Fit in log space so the tail isn't ignored
             popt, _ = sp.optimize.curve_fit(
                 hg_model, 
-                valid_angles, 
+                valid_rads, 
                 np.log10(valid_reflectances), # Log of original dataset is being fit with log of best-fit dataset
                 p0=p0, 
                 bounds=bounds,
