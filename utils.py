@@ -26,6 +26,7 @@ def wb08read(data_path):
     with open(data_path, 'r') as f:
         reader = csv.reader(f)
         next(reader) # Skip header row
+        next(reader) # Skip column header row
         #line=line.strip(',')
         #print(line)
         for line in reader:
@@ -40,29 +41,60 @@ def wb08read(data_path):
     kw=np.array(kw)
     return wavew,nw,kw
 
-def get_nk(wavel,comp):
+def get_nk(wavel, comps, mixmodel='Molecular'):
     """
     Determines complex index of refraction n + ki of a material given its composition and the incident wavelength.
 
     :param wavel: Float wavelength in microns
-    :param comp: String composition of material
+    :param comps: Dictionary of string compositions of material and given volume fractions
+    :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'
     :returns: Float n (refractive index) at the given wavelength
               Float k (absorption coefficient) at the given wavelength
     """
-    idx_refraction_path = os.path.join("data", comp + "_constants.csv")
+
+    # Create empty arrays to hold all the data
+    dielectrics = []
+    fs = []
+    ns = []
+    ks = []
+
+    for comp in comps.keys():
+        # Material files MUST be formatted with "_constants.csv" at the end!
+        idx_refraction_path = os.path.join("data", comp + "_constants.csv")
+        try:
+            # Reads the appropriate csv file
+            wavex,nx,kx=wb08read(idx_refraction_path)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Material {comp} not supported.")
     
-    # Calling function to read appropriate tables of optical constants for water ice
-    try:
-        wavex,nx,kx=wb08read(idx_refraction_path)
-    except FileNotFoundErrors:
-        raise FileNotFoundError("Material type not supported.")
-    
-    # Interpolate to given wavelength
-    nxfunc=sp.interpolate.interp1d(wavex,nx)
-    kxfunc=sp.interpolate.interp1d(wavex,kx)
-    n=nxfunc(wavel)
-    k=kxfunc(wavel)
-    return n,k
+        # Interpolate to given wavelength
+        nxfunc=sp.interpolate.interp1d(wavex,nx)
+        kxfunc=sp.interpolate.interp1d(wavex,kx)
+        ns.append(nxfunc(wavel))
+        ks.append(kxfunc(wavel))
+
+        dielectrics.append((ns[-1]**2 - ks[-1]**2) + 1j*2*ns[-1]*ks[-1]) # Compute dielectric
+        fs.append(float(comps[comp])) # Append v/v fraction for material
+
+    if len(dielectrics) == 1:
+        return ns[0], ks[0] # Return single material n, k if only one material
+    else:
+        if mixmodel == 'Molecular':
+            # Molecular mixture requires that we consider particles of evenly mixed materials
+            # This requires considering the dielectric constants of each
+            eps_x = dielectrics[0]*(1 + 3*fs[1]*(dielectrics[1]-dielectrics[0])/(dielectrics[1]+2*dielectrics[0])/(1 - fs[1]*(dielectrics[1]-dielectrics[0])/(dielectrics[1]+2*dielectrics[0])))
+            n=np.sqrt(.5)*np.sqrt(np.sqrt(np.real(eps_x)**2+np.imag(eps_x)**2)+np.real(eps_x))
+            k=np.sqrt(.5)*np.sqrt(np.sqrt(np.real(eps_x)**2+np.imag(eps_x)**2)-np.real(eps_x))
+            return n,k
+        elif mixmodel == 'Areal':
+            # Areal mixture assumes that we have a mixture of particles made of separate materials
+            # We can simply do a weighted average in this case
+            n = np.sum([ns[i] * fs[i] for i in range(len(ns))])
+            k = np.sum([ks[i] * fs[i] for i in range(len(ks))])
+            return n,k
+        else:
+            # Handle the case of an improper argument
+            raise ValueError(f"Mixture model {mixmodel} not supported.")
 
 def get_minmax_wavel(comp):
     """
@@ -78,9 +110,28 @@ def get_minmax_wavel(comp):
     try:
         wavex,_,_=wb08read(idx_refraction_path)
         wavex.sort() # Sort just in case
-        return wavex[0], wavex[-1] # Return min and max
-    except FileNotFoundErrors:
+        return [comp, wavex[0]], [comp, wavex[-1]] # Return min and max
+    except FileNotFoundError:
         raise FileNotFoundError("Material type not supported.")
+
+def get_available_materials():
+    """
+    Searches through the 'data' subfolder and finds all properly-formatted material data files. If Water Ice is
+    found, it will be put on top.
+
+    :returns: List of string material names before the '_constants.csv', with 'Water Ice' at the top if found
+    """
+    files = os.listdir("data") # List all files
+    data_files = []
+    for file in files:
+        if file.endswith("_constants.csv"): # Ensure files end with _constants.csv
+            data_files.append(file[:-14]) # Append the material name part of the filename
+    if "Water Ice" in data_files: # Move Water Ice to the top if found
+        data_files.remove("Water Ice")
+        temp_files = ["Water Ice"]
+        temp_files.extend(data_files)
+        data_files = temp_files
+    return data_files
 
 def get_data(src, altitude=None):
     """
@@ -132,7 +183,7 @@ def get_data(src, altitude=None):
 
     return thetas, reflectances
 
-def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, theta_max=vars.ANGLE_UPPERBOUND, wavels=[vars.WAVEL], nsize=vars.NSIZE, comp='Water Ice', tau=None, ref_if=0):
+def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, theta_max=vars.ANGLE_UPPERBOUND, wavels=[vars.WAVEL], nsize=vars.NSIZE, comps={vars.COMP: 1}, mixmodel='Molecular', tau=None, ref_if=0):
     """
     Computes curve-fit I/F reflectance using Mie scattering theory, given a power law and a range of sizes, angles, and wavelengths.
     First guesses tau based on initial reflectance data and scales best-fit line accordingly. Due to the tendency of
@@ -147,7 +198,8 @@ def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, 
     :param theta_max: Integer maximum angle with which to curve fit to original data
     :param wavel: Array of wavelengths at which to evaluate Mie
     :param nsize: Integer number of particle sizes to use (resolution)
-    :param comp: Composition of material. Currently only Water Ice and Tholins are accepted.
+    :param comps: Dictionary with keys as materials and values as volume fractions of materials
+    :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'  
     :param tau: Float allowing for optical detph tau to be input, rather than calculated
     :param ref_if: Float reflectance from original data from which to calculate optical depth tau. ref_if MUST correspond to theta_min.
     :returns: 2D Array of reflectance values between theta_min, theta_max, and the min and max of wavels. Shape (len(wavels), len(angles))
@@ -184,7 +236,7 @@ def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, 
 
         # --- SMALL REGIME PARTICLES ---
         # Compute index of refraction at given wavelength
-        n, k = get_nk(wavel, comp)
+        n, k = get_nk(wavel, comps, mixmodel=mixmodel)
         m = complex(n, k)
 
         SU = np.zeros_like(angle_range)
@@ -304,7 +356,7 @@ def henyey_greenstein(angle, gweights):
         hg_term += w/(4*np.pi)*(1-g**2)/(1+g**2-2*g*np.cos(angle))**1.5
     return hg_term
 
-def output_graph(ifvangle, sensor, comp, datamodel, fitmodel, param, tau):
+def output_graph(ifvangle, sensor, comps, mixmodel, datamodel, fitmodel, param, tau):
     """
     A function that takes input scattering data as might be observed by one of Europa Clipper's instruments,
     as well as additional data about the fit and the plot type desired, and outputs the corresponding x and y
@@ -313,7 +365,8 @@ def output_graph(ifvangle, sensor, comp, datamodel, fitmodel, param, tau):
     :param ifvangle: Boolean. True indicates output x array will be scattering angles, false means it will be
                      wavelengths.
     :param sensor: String sensor from which to read wavelength range
-    :param comp: String composition of material
+    :param comps: Dictionary with keys as materials and values as volume fractions of materials
+    :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'
     :param datamodel: String data model to use, either 'G-ring-like' or 'E-ring-like'
     :param fitmodel: String for fit model to use, either 'Mie' or 'Henyey-Greenstein'
     :param param: Fixed parameter to base reflectances on. Float wavelength if ifvangle = True, int scattering
@@ -333,7 +386,7 @@ def output_graph(ifvangle, sensor, comp, datamodel, fitmodel, param, tau):
     if ifvangle:
         xarr = np.arange(0, 181, 1) # Declare array of angles 0 to 180 degrees
         # Get reflectances. Programmed so that angles start, stop, and step the same way as xarr
-        reflectances = angle_mie_reflectances(disttype[0], disttype[1], disttype[2], theta_min=0, theta_max=180, wavels=[param], comp=comp, nsize=pvars.NSIZE, tau=tau)[0][0]
+        reflectances = angle_mie_reflectances(disttype[0], disttype[1], disttype[2], theta_min=0, theta_max=180, wavels=[param], comps=comps, mixmodel=mixmodel, nsize=pvars.NSIZE, tau=tau)[0][0]
 
         # For Henyey-Greenstein, curve fitting is needed to determine global scale factor
         if fitmodel == 'Henyey-Greenstein':
@@ -365,7 +418,7 @@ def output_graph(ifvangle, sensor, comp, datamodel, fitmodel, param, tau):
     else:
         wavel_range = pvars.INSTRUMENTS[sensor] # Plot over range of all available wavelengths in the sensor
         xarr = np.arange(wavel_range[0], wavel_range[1] + 0.01, 0.01) # Assume a 10 nm resolution
-        reflectances = angle_mie_reflectances(disttype[0], disttype[1], disttype[2], theta_min=param, theta_max=param, wavels=xarr, nsize=pvars.NSIZE, tau=tau)[0]
+        reflectances = angle_mie_reflectances(disttype[0], disttype[1], disttype[2], theta_min=param, theta_max=param, wavels=xarr, comps=comps, mixmodel=mixmodel, nsize=pvars.NSIZE, tau=tau)[0]
         # angle_mie_reflectances returns a weird column array shape [[element1], [element2], [element3]]
         # Need to make array not as deep
         reflectances = [element[0] for element in reflectances]
@@ -636,11 +689,11 @@ def angle_wavel_csv(file_path, wavels, angles, reflectances):
     with open(file_path, 'w') as f:
         writer = csv.writer(f)
         header = ["Wavelength (μm) | Scattering Angle (°)"]
-        header.extend(angles)
+        header.extend(angles) # Since array is two-dimensional, top left box will be title, and top axis will be angles
         writer.writerow(header)
         for idx, wavel_slice in enumerate(reflectances):
             row = [wavels[idx]]
-            row.extend(wavel_slice)
+            row.extend(wavel_slice) # Left axis will be wavelengths, plus all values to the right
             writer.writerow(row)
     print(f"Wavelength-angle reflectance table saved to {file_path}")
 

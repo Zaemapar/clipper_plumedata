@@ -71,7 +71,7 @@ if __name__ == "__main__":
             return np.log10(reflectances) # Fit will be done to log scale
 
         # Obtain the optical constants at the desired wavelength
-        n,k=utils.get_nk(vars.WAVEL, vars.COMP)
+        n,k=utils.get_nk(vars.WAVEL, {vars.COMP: 1})
 
         # Compute the reflectance (I/F) of the particle population.
         # Note this uses the same normalization process as described in Appendix B of

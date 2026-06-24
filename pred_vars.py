@@ -1,16 +1,11 @@
 # --- PREDICTION FILE PARAMETERS ---
 TAU = 1e-6 # Optical depth
 INSTRUMENTS = {'NAC': [0.358, 1.050], 'WAC': [0.370, 1.050], 'MISE': [0.8, 5], 'Europa-UVS': [0.055, 0.206]}
-COMPS = ['Water Ice', 'Tholins'] # Composition of material. Currently only these are supported.
 DATA_MODELS = ['G-ring-like', 'E-ring-like']
-
-# Angle scan bounds
-ANGLE_LOWERBOUND = 0
-ANGLE_UPPERBOUND = 180
-PLOT_ANGLES = [10, 20, 30, 40, 60, 120, 180] # Angles to use on wavelength plot
+COMP = 'Water Ice'
 
 # Other distribution parameters
-NSIZE=51 # Number of sizes to include in distribution (resolution)
+NSIZE=51 # Number of sizes to include in Mie distribution (resolution)
 # Arrays of parameters for Mie and Henyey-Greenstein functions for different data models.
 # 1st is G-ring-like, 2nd is E-ring-like
 DISTTYPE_ARR = [[4.5357, 8.4725, 2.3550],
