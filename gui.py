@@ -40,7 +40,8 @@ class MainWindow(qt.QMainWindow):
         # --- WIDGETS ---
 
         # Push button to toggle between reflectance vs wavelength graphs and reflectance vs scattering angle graphs
-        self.ifvangle = False # Indicates what type of graph is being shown
+        # Indicates what type of graph is being shown. 0 is IFs vs wavelengths, 1 is surface albedos vs wavelengths, 2 is IFs vs scattering angles
+        self.graphmode = 0
         self.graph_mode_button = qt.QPushButton("Reflectance vs. Wavelength")
 
         # Dropdown list for instruments on Europa Clipper
@@ -55,7 +56,6 @@ class MainWindow(qt.QMainWindow):
         # plus an entry field for the corresponding volume fraction
         self.comps = [[qt.QComboBox(), qt.QLineEdit()]]
         self.comps[0][0].addItems(COMPS)
-        self.comps[0][1].setStyleSheet("border: 1px solid black;")
         self.comps[0][1].setText('1.0') # The default volume fraction (not shown) is 1.0, since there is only one material
         # Determining the minimum and maximum bounds for wavelength based on available material data
         # Instrument wavelength ranges will be far more limiting, but good to include this nonetheless
@@ -81,7 +81,6 @@ class MainWindow(qt.QMainWindow):
         self.tau_box = qt.QLineEdit()
         self.tau_box.setPlaceholderText("Input optical depth") # Switching graph modes will clear this box, so this needs to display
         self.tau_box.setText("1e-6") # Standard order of magnitude for optical depth
-        self.tau_box.setStyleSheet("border: 1px solid black;") # Declaring border type for future modification
 
         # Entry box for varying parameter, either scattering angle (for ref vs. wavel) or wavelength (for ref vs. theta)
         self.param_str = ''
@@ -89,7 +88,6 @@ class MainWindow(qt.QMainWindow):
         self.input_box = qt.QLineEdit()
         self.input_box.setPlaceholderText("Input scattering angle in degrees")
         self.input_box.setText("90")
-        self.input_box.setStyleSheet("border: 1px solid black;") # Declaring border type for future modification
 
         # Setting up radio buttons for X and Y scales, change between linear and logarithmic
         self.x_scale_label = qt.QLabel("X Scale:")
@@ -147,6 +145,20 @@ class MainWindow(qt.QMainWindow):
         # Setting up the 'home zoom' button to reset the zoom
         self.home_button = qt.QPushButton("Home")
 
+        # Setting up the min and max bounds for x and y
+        self.xmin_label = qt.QLabel("Min X:")
+        self.xmin_box = qt.QLineEdit()
+        self.xmin_box.setMaximumWidth(50)
+        self.xmax_label = qt.QLabel("Max X:")
+        self.xmax_box = qt.QLineEdit()
+        self.xmax_box.setMaximumWidth(50)
+        self.ymin_label = qt.QLabel("Min Y:")
+        self.ymin_box = qt.QLineEdit()
+        self.ymin_box.setMaximumWidth(50)
+        self.ymax_label = qt.QLabel("Max Y:")
+        self.ymax_box = qt.QLineEdit()
+        self.ymax_box.setMaximumWidth(50)
+
         # --- WIDGET FUNCTIONALITY ---
         # Pressing the graph mode button toggles between ref vs wavel and ref vs angle
         self.graph_mode_button.clicked.connect(self.mode_toggle)
@@ -175,7 +187,42 @@ class MainWindow(qt.QMainWindow):
         # Pressing save plot button saves the graph to file
         self.save_plot_button.clicked.connect(self.save_graph)
         # Pressing the home zoom button auto-zooms the graph
-        self.home_button.clicked.connect(lambda: self.graph_widget.autoRange())
+        self.home_button.clicked.connect(lambda: self.rst_boxes(autozoom=True))
+
+        # Hitting return in any of the bounds fields will cause a bounds update
+        self.xmin_box.returnPressed.connect(self.update_bounds)
+        self.xmax_box.returnPressed.connect(self.update_bounds)
+        self.ymin_box.returnPressed.connect(self.update_bounds)
+        self.ymax_box.returnPressed.connect(self.update_bounds)
+
+        # --- GRAPH DRAG & RELEASE LOGIC ---
+        
+        # Create a flag to track if the user actually dragged the graph
+        self.graph_was_dragged = False
+        # Listen for manual range changes (fires continuously during a drag)
+        def flag_dragged():
+            self.graph_was_dragged = True
+        self.graph_widget.getViewBox().sigRangeChangedManually.connect(flag_dragged)
+        # Store the original mouse release to avoid breaking PyQt6's internal math
+        self._original_mouse_release = self.graph_widget.mouseReleaseEvent
+
+        def click_release(event):
+            """
+            A function that tracks when the user has let go after dragging the graph with their mouse, signals
+            to update the bounds boxes.
+
+            :param event: Keyboard input event to watch for
+            """
+            # Let PyQtGraph finish its native panning/zooming logic first
+            self._original_mouse_release(event)
+            # Check if this release was the end of a drag, or just a normal click
+            if self.graph_was_dragged:
+                # Reset the flag for the next time
+                self.graph_was_dragged = False
+                self.rst_boxes() # Reset bounds boxes
+            
+        # Override default mouse release event
+        self.graph_widget.mouseReleaseEvent = click_release
 
         # --- LAYOUT ---
         # Items are arranged in (row, column, rowspan, columnspan)
@@ -188,6 +235,14 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.instrument, 5, 1, 1, 2)
         self.layout.addWidget(self.graph_widget, 0, 3, 16, 16)
         self.layout.addWidget(self.home_button, 1, 4, 1, 1)
+        self.layout.addWidget(self.xmin_label, 1, 15, 1, 1)
+        self.layout.addWidget(self.xmin_box, 1, 16, 1, 1)
+        self.layout.addWidget(self.xmax_label, 1, 17, 1, 1)
+        self.layout.addWidget(self.xmax_box, 1, 18, 1, 1)
+        self.layout.addWidget(self.ymin_label, 2, 15, 1, 1)
+        self.layout.addWidget(self.ymin_box, 2, 16, 1, 1)
+        self.layout.addWidget(self.ymax_label, 2, 17, 1, 1)
+        self.layout.addWidget(self.ymax_box, 2, 18, 1, 1)
 
         # These two will get replaced by a table if multi-material mixture is enabled
         self.layout.addWidget(self.comp_labels[0], 6, 0, 1, 1)
@@ -222,6 +277,7 @@ class MainWindow(qt.QMainWindow):
 
         self.update_graph() # There are default settings in the input boxes, so output the first graph
         self.update_title(self.legend_idxs)
+        self.all_borders('black') # Set all input box borders to black
 
     def mode_toggle(self):
         """
@@ -231,22 +287,64 @@ class MainWindow(qt.QMainWindow):
 
         :param self: MainWindow object
         """
-        self.ifvangle = not self.ifvangle # Switch the graph mode variable
-        if self.ifvangle:
-            self.graph_mode_button.setText("Reflectance vs. Scattering Angle")
-            self.input_label.setText("Wavelength:")
-            self.input_box.setPlaceholderText("Input wavelength in microns")
-            self.graph_widget.setLabel('bottom', 'Scattering Angle', units='°') # Change bottom axis label
-            self.model_b.setVisible(True) # Reflectance vs. scattering angle has Henyey-Greenstein functionality
-            self.clear_graph() # Clear graph when finished
-        else:
+        # First ensure all missing widgets are displayed upon a mode change
+        if self.graphmode == 1:
+            self.mknewrow(7, 3)
+            self.layout.addWidget(self.dist_label,  7, 0, 1, 1)
+            self.layout.addWidget(self.dist_model, 7, 1, 1, 2)
+            self.layout.addWidget(self.fit_label, 8, 0, 1, 1)
+            self.layout.addWidget(self.model_a, 8, 1, 1, 1)
+            self.layout.addWidget(self.model_b, 8, 2, 1, 1)
+            self.layout.addWidget(self.tau_label, 9, 0, 1, 1)
+            self.layout.addWidget(self.tau_box, 9, 1, 1, 2)
+            self.dist_label.setVisible(True)
+            self.dist_model.setVisible(True)
+            self.fit_label.setVisible(True)
+            self.model_a.setVisible(True)
+            self.model_b.setVisible(True)
+            self.tau_label.setVisible(True)
+            self.tau_box.setVisible(True)
+
+
+        self.graphmode = int((self.graphmode + 1) % 3) # Switch the graph mode variable
+        if self.graphmode == 0:
             self.graph_mode_button.setText("Reflectance vs. Wavelength")
             self.input_label.setText("Scattering Angle:")
             self.input_box.setPlaceholderText("Input scattering angle in degrees")
             self.graph_widget.setLabel('bottom', 'Wavelength', units='μm')
             self.model_b.setVisible(False) # Reflectance vs. wavelength does not have Henyey-Greenstein functionality
             self.model_a.setChecked(True) # So we set it automatically to the remaining Mie option
-            self.clear_graph()
+        elif self.graphmode == 1:
+            self.graph_mode_button.setText("Surface Reflectance vs. Wavelength")
+            self.input_label.setText("Effective Grain Size:")
+            self.input_box.setPlaceholderText("Input effective grain size in microns")
+            self.graph_widget.setLabel('bottom', 'Wavelength', units='μm')
+
+            # Hide all unnecessary widgets (only the input param is needed)
+            self.layout.removeWidget(self.dist_label)
+            self.dist_label.setVisible(False)
+            self.layout.removeWidget(self.dist_model)
+            self.dist_model.setVisible(False)
+            self.layout.removeWidget(self.fit_label)
+            self.fit_label.setVisible(False)
+            self.layout.removeWidget(self.model_a)
+            self.model_a.setVisible(False)
+            self.layout.removeWidget(self.model_b)
+            self.model_b.setVisible(False)
+            self.layout.removeWidget(self.tau_label)
+            self.tau_label.setVisible(False)
+            self.layout.removeWidget(self.tau_box)
+            self.tau_box.setVisible(False)
+            self.mknewrow(10, -3)
+
+        elif self.graphmode == 2:
+            self.graph_mode_button.setText("Reflectance vs. Scattering Angle")
+            self.input_label.setText("Wavelength:")
+            self.input_box.setPlaceholderText("Input wavelength in microns")
+            self.graph_widget.setLabel('bottom', 'Scattering Angle', units='°') # Change bottom axis label
+            self.model_b.setVisible(True) # Reflectance vs. scattering angle has Henyey-Greenstein functionality
+        
+        self.clear_graph() # Clear graph when finished
 
     def update_graph(self):
         """
@@ -257,9 +355,7 @@ class MainWindow(qt.QMainWindow):
 
         :param self: MainWindow object
         """
-        # Reset the borders of the input boxes to black in case they were red before
-        self.tau_box.setStyleSheet("border: 1px solid black;")
-        self.input_box.setStyleSheet("border: 1px solid black;")
+        self.all_borders('black') # Reset any previous errors
         self.load_label.setText("Updating...") # Status label changes to indicate loading
         qt.QApplication.processEvents() # Force a screen update to render the status label and the box borders
 
@@ -268,8 +364,8 @@ class MainWindow(qt.QMainWindow):
             # Update materials checks to make sure there aren't errors specifically in the materials table
             err_message += self.update_materials()
 
+
         # Read each parameter from the appropriate widget
-        ifvanglebool = self.ifvangle
         compositions = {}
         sensor = self.instrument.currentText()
 
@@ -303,7 +399,7 @@ class MainWindow(qt.QMainWindow):
 
         # Error handling - checking to make sure that all parameters are in bounds
         # Error checking for parameter if it's a wavelength
-        if ifvanglebool:
+        if self.graphmode == 2:
             try:
                 param = float(self.param_str)
                 # Check to make sure it's in range of the sensor AND the index of refraction data for that material
@@ -343,13 +439,21 @@ class MainWindow(qt.QMainWindow):
                 else:
                     err_message += f'Wavelength must be a float, MIN, or MAX. '
         # Error checking for parameter if it's a scattering angle
-        else:
+        elif self.graphmode == 0:
             try:
                 param = int(self.param_str)
                 if param < 0 or param > 180:
                     err_message += f'Scattering angle must be between 0 and 180 degrees. '
             except ValueError:
                 err_message += f'Scattering angle must be an integer. '
+        # Error checking for parameter if it's an effective grain size
+        elif self.graphmode == 1:
+            try:
+                param = float(self.param_str)
+                if param < 0:
+                    err_message += f'Effective grain size must be nonnegative. '
+            except ValueError:
+                err_message += f'Effective grain size must be a float. '
 
         # Error checking for tau
         try:
@@ -362,56 +466,49 @@ class MainWindow(qt.QMainWindow):
         if len(err_message) == 0:
             # Get the current text box values (updated_params), plus any indexes where they're different from the original data
             updated_params, temp_legend_idxs = self.track_changes()
+            # temp_legend_idxs is only ever None if there are multiple plots in the window and the current plot
+            # is found to match a plot somewhere in the window's history. Not necessarily checking for change
+            # but for duplicate plots
+            if temp_legend_idxs is None:
+                    self.load_label.setText("Plot is identical to existing data")
+                    self.ifs.setData([], [])
+                    self.legend.removeItem(self.ifs)
+                    self.all_borders('red')
             # This function runs whenever a field is clicked. But if it hasn't changed, don't bother with calculations
-            if len(temp_legend_idxs) == 0:
+            elif len(temp_legend_idxs) == 0:
                 self.load_label.setText("Plot is identical to previous graph")
                 # Generic errors are generally speaking going to turn all the boxes red
-                self.input_box.setStyleSheet("border: 1px solid red;")
-                self.tau_box.setStyleSheet("border: 1px solid red;")
-                for i in range(len(self.comps)):
-                    self.comps[i][1].setStyleSheet("border: 1px solid red;")
+                self.all_borders('red')
             else:
                 # If the text box values are in fact unique and have no errors, update the last element in the base parameter array
                 # The last element represents the current plot
                 self.base_params[-1] = updated_params
 
-                # temp_legend_idxs is only ever None if there are multiple plots in the window and the current plot
-                # is found to match a plot somewhere in the window's history. Not necessarily checking for change
-                # but for duplicate plots
-                if temp_legend_idxs is None:
-                    self.load_label.setText("Plot is identical to existing data")
-                    self.ifs.setData([], [])
-                    self.legend.removeItem(self.ifs)
-                    self.input_box.setStyleSheet("border: 1px solid red;")
-                    self.tau_box.setStyleSheet("border: 1px solid red;")
-                    for i in range(len(self.comps)):
-                        self.comps[i][1].setStyleSheet("border: 1px solid red;")
+                # Reuse the same pen color for all updates to the current plot
+                self.plt_pen.setColor(pg.mkColor(COLOR_ARR[self.last_color_idx]))
+                
+                # Get the new x and y datasets if no errors
+                self.x_data, self.y_data = utils.output_graph(self.graphmode, updated_params[0], updated_params[1], updated_params[2], updated_params[3], updated_params[4], float(updated_params[6]), float(updated_params[5]), wavelbounds=(self.comp_min_wavel, self.comp_max_wavel))
+                
+                # Plot the dataset if not in the graph, else change the current unsaved graph
+                if self.ifs not in self.graph_widget.plotItem.items:
+                    self.ifs = self.graph_widget.plot(self.x_data, self.y_data, pen=self.plt_pen, name=(f"{self.param_str}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}" if self.multiple else None))
                 else:
-                    # Reuse the same pen color for all updates to the current plot
-                    self.plt_pen.setColor(pg.mkColor(COLOR_ARR[self.last_color_idx]))
-                    
-                    # Get the new x and y datasets if no errors
-                    self.x_data, self.y_data = utils.output_graph(ifvanglebool, updated_params[0], updated_params[1], updated_params[2], updated_params[3], updated_params[4], float(updated_params[6]), float(updated_params[5]))
-                    
-                    # Plot the dataset if not in the graph, else change the current unsaved graph
-                    if self.ifs not in self.graph_widget.plotItem.items:
-                        self.ifs = self.graph_widget.plot(self.x_data, self.y_data, pen=self.plt_pen, name=(f"{self.param_str}{' μm' if self.ifvangle else '°'}" if self.multiple else None))
-                    else:
-                        self.ifs.setData(self.x_data, self.y_data)
+                    self.ifs.setData(self.x_data, self.y_data)
 
-                    # Update the legend if multiple graphs
-                    if self.multiple:
-                        self.legend.removeItem(self.ifs) # Need to do remove + add because there's no setter function
-                        self.legend.addItem(self.ifs, '') # Add a blank placeholder for self.ifs so legend setter function has a full array to loop through
-                        self.generate_legend(temp_legend_idxs)
+                # Update the legend if multiple graphs
+                if self.multiple:
+                    self.legend.removeItem(self.ifs) # Need to do remove + add because there's no setter function
+                    self.legend.addItem(self.ifs, '') # Add a blank placeholder for self.ifs so legend setter function has a full array to loop through
+                    self.generate_legend(temp_legend_idxs)
 
-                    self.load_label.setText("Up to date")
-                    self.graph_widget.autoRange() # Window auto fit for the new dataset
-                    self.update_title(temp_legend_idxs)
+                self.update_title(temp_legend_idxs)
+                self.rst_boxes(autozoom=True) # Reset zoom
+                self.load_label.setText("Up to date")
         else:
             self.load_label.setText(err_message)
             # Scan the error message for problematic variables and turn their boxes red
-            if 'Wavelength' in err_message or 'Scattering angle' in err_message:
+            if 'Wavelength' in err_message or 'Scattering angle' in err_message or 'Effective grain size':
                 self.input_box.setStyleSheet("border: 1px solid red;")
             if 'Optical depth' in err_message:
                 self.tau_box.setStyleSheet("border: 1px solid red;")
@@ -431,22 +528,15 @@ class MainWindow(qt.QMainWindow):
         # If the data haven't been plotted for this graph yet, throw a general error
         if len(self.x_data) == 0 or len(self.y_data) == 0:
             self.load_label.setText("No plot to add")
-            self.input_box.setStyleSheet("border: 1px solid red;")
-            self.input_box.setStyleSheet("border: 1px solid red;")
-            self.tau_box.setStyleSheet("border: 1px solid red;")
-            for i in range(len(self.comps)):
-                self.comps[i][1].setStyleSheet("border: 1px solid red;")
+            self.all_borders('red')
         # If the data have been found in a previous dataset, throw a general error
         # Should be caught by the update_graph, but just in case
         elif self.legend_idxs is None:
             self.load_label.setText("Plot is identical to existing data")
-            self.input_box.setStyleSheet("border: 1px solid red;")
-            self.input_box.setStyleSheet("border: 1px solid red;")
-            self.tau_box.setStyleSheet("border: 1px solid red;")
-            for i in range(len(self.comps)):
-                self.comps[i][1].setStyleSheet("border: 1px solid red;")
-
+            self.all_borders('red')
         else:
+            self.all_borders('black')
+
             # Create a legend if none already. Needs to be here since legends are for multiple graphs only
             if self.legend == None:
                 self.legend = self.graph_widget.addLegend()
@@ -464,7 +554,7 @@ class MainWindow(qt.QMainWindow):
             # self.generate_legend looks for changes across datasets, but if there's only one in the window,
             # use default legend label
             if not self.multiple:
-                self.legend.items[-1][1].setText(f"{self.base_params[0][-1]}{' μm' if self.ifvangle else '°'}") # Default legend string for first item
+                self.legend.items[-1][1].setText(f"{self.base_params[0][-1]}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}") # Default legend string for first item
             
             self.multiple = True # Set the global variable to indicate multiple graphs stored on plot
             self.update_title(self.legend_idxs)
@@ -475,6 +565,7 @@ class MainWindow(qt.QMainWindow):
             self.x_data = []
             self.y_data = []
             self.ifs.setData(self.x_data, self.y_data)
+            self.load_label.setText("Up to date")
 
     def clear_graph(self):
         """
@@ -495,8 +586,7 @@ class MainWindow(qt.QMainWindow):
         self.legend = None # Erase stored legend
         # Erase all base parameters and varying parameters
         self.legend_idxs = []
-        self.base_params = [[None, None, None, None, None, None]]
-        self.load_label.setText("Up to date")
+        self.base_params = [[None, None, 'Molecular', None, None, None, None]]
 
         # Erase all compositions except the first
         self.comps = [[qt.QComboBox(), qt.QLineEdit()]]
@@ -508,10 +598,7 @@ class MainWindow(qt.QMainWindow):
         # Recompute material wavelength bounds
         self.comp_min_wavel, self.comp_max_wavel = utils.get_minmax_wavel(self.comps[0][0].currentText())
 
-        # Remove all error red borders
-        self.input_box.setStyleSheet("border: 1px solid black;")
-        self.tau_box.setStyleSheet("border: 1px solid black;")
-        self.comps[0][1].setStyleSheet("border: 1px solid black;")
+        self.all_borders('black') # Remove all error red borders
 
         # Remove material table and mixture model toggle if present
         if self.mat_table is not None:
@@ -533,6 +620,10 @@ class MainWindow(qt.QMainWindow):
         # Add singular label and composition dropdown
         self.layout.addWidget(self.comp_labels[0], 6, 0, 1, 2)
         self.layout.addWidget(self.comps[0][0], 6, 1, 1, 2)
+
+        self.rst_boxes(autozoom=True) # Re-zoom to fit
+
+        self.load_label.setText("Up to date")
 
     def update_scale(self):
         """
@@ -587,8 +678,8 @@ class MainWindow(qt.QMainWindow):
         """
         title_str = ''
         # Base of title changes with graph mode
-        if not self.ifvangle:
-            title_str += f"Reflectance vs. Wavelength "
+        if self.graphmode == 0 or self.graphmode == 1:
+            title_str += f"{'Surface ' if self.graphmode == 1 else ''}Reflectance vs. Wavelength "
         else:
             title_str += f"Reflectance vs. Scattering Angle "
 
@@ -610,7 +701,12 @@ class MainWindow(qt.QMainWindow):
                 elif idx == 5:
                     title_str += 'Optical Depths'
                 elif idx == 6:
-                    title_str += 'Wavelengths' if self.ifvangle else 'Scattering Angles'
+                    if self.graphmode == 0:
+                        title_str += 'Scattering Angles'
+                    elif self.graphmode == 1:
+                        title_str += 'Effective Grain Sizes'
+                    else:
+                        title_str += 'Wavelengths'
 
                 # Adding commas and an 'and' after the second-to-last element for grammatical accuracy
                 if i < len(title_elements) - 2:
@@ -622,7 +718,13 @@ class MainWindow(qt.QMainWindow):
                         title_str += ' and '
         # A single graph will always have its wavelength (if ref vs angle) or scattering angle (if ref vs wavelength) displayed
         else:
-            title_str += 'at ' + self.param_str + (' μm Wavelength' if self.ifvangle else '° Scattering Angle')
+            title_str += 'at ' + self.param_str
+            if self.graphmode == 0:
+                title_str += '° Scattering Angle'
+            elif self.graphmode == 1:
+                title_str += ' μm Effective Grain Size'
+            else:
+                title_str += ' μm Wavelength'
 
         # As long as the title does not detect various instruments being represented, it is helpful to include the
         # instrument observing the data
@@ -723,7 +825,7 @@ class MainWindow(qt.QMainWindow):
                     elif item == 5:
                         legend_str += f'tau={self.base_params[i][item]:.2s}'
                     elif item == 6:
-                        legend_str += f"{self.base_params[i][item]}{' μm' if self.ifvangle else '°'}"
+                        legend_str += f"{self.base_params[i][item]}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}"
 
                     # If before the last thing to add to legend, add a comma and a space
                     if len(legend_idxs) > 1 and idx < len(legend_idxs) - 1:
@@ -814,7 +916,6 @@ class MainWindow(qt.QMainWindow):
         empty_item_idxs = [] # Array to hold indices of input fields without valid values
         for idx, item in enumerate(self.comps):
             # First reset all boxes to black-bordered
-            self.comps[idx][1].setStyleSheet("border: 1px solid black;")
             text = item[1].text()
             if text == '':
                 empty_item_idxs.append(idx) # Append index if empty
@@ -882,6 +983,108 @@ class MainWindow(qt.QMainWindow):
         for widget, row, col, rowSpan, colSpan in widgets_to_remove:
             self.layout.removeWidget(widget)
             self.layout.addWidget(widget, row + rowshift, col, rowSpan, colSpan) 
+
+    def all_borders(self, color):
+        """
+        Sets all input box borders to a certain color, used in displaying/removing global errors
+
+        :param self: MainWindow object
+        :param color: String color to set box outlines to
+        """
+        self.tau_box.setStyleSheet(f"border: 1px solid {color};")
+        self.input_box.setStyleSheet(f"border: 1px solid {color};")
+        # Iterate through each composition box. Will work if only one.
+        for i in range(len(self.comps)):
+            self.comps[i][1].setStyleSheet(f"border: 1px solid {color};")
+
+    def rst_boxes(self, autozoom=False):
+        """
+        Sets the min and max values for X and Y in their respective input boxes according to the current window
+        parameters.
+
+        :param self: MainWindow object
+        :param autozoom: Boolean, whether or not to reset zoom automatically 
+        """
+        # Reset all bound borders to erase previous errors
+        self.xmin_box.setStyleSheet(f"border: 1px solid black;")
+        self.xmax_box.setStyleSheet(f"border: 1px solid black;")
+        self.ymin_box.setStyleSheet(f"border: 1px solid black;")
+        self.ymax_box.setStyleSheet(f"border: 1px solid black;")
+
+        if autozoom:
+            self.graph_widget.autoRange() # Window auto fit for the new dataset
+
+        # Get bounds of window
+        bounds = self.graph_widget.viewRange()
+
+        # Set x and y bound text boxes to reflect current bounds
+        self.xmin_box.setText(str(bounds[0][0]))
+        self.xmax_box.setText(str(bounds[0][1]))
+        self.ymin_box.setText(str(bounds[1][0]))
+        self.ymax_box.setText(str(bounds[1][1]))
+
+    def update_bounds(self):
+        """
+        A function that updates the bounds of the graph widget based on user input values for xmin, xmax, ymin,
+        and ymax.
+
+        :param self: MainWindow object
+        """
+        # Reset all bound borders to erase previous errors
+        self.xmin_box.setStyleSheet(f"border: 1px solid black;")
+        self.xmax_box.setStyleSheet(f"border: 1px solid black;")
+        self.ymin_box.setStyleSheet(f"border: 1px solid black;")
+        self.ymax_box.setStyleSheet(f"border: 1px solid black;")
+
+        err_string = '' # Error string for dynamic error updating
+
+        # Parse each of the entry fields
+        xmin = self.xmin_box.text()
+        xmax = self.xmax_box.text()
+        ymin = self.ymin_box.text()
+        ymax = self.ymax_box.text()
+
+        # Try to convert to floats and update error string if fail, also ensure maxes > mins
+        try:
+            xmin = float(xmin)
+        except ValueError:
+            err_string += 'Min X must be a float. '
+
+        try:
+            xmax = float(xmax)
+            # Ensure xmin is a float before checking this error
+            if 'Min X' not in err_string and xmax <= xmin:
+                err_string += 'Max X must be greater than min X. '
+        except ValueError:
+            err_string += 'Max X must be a float. '
+
+        try:
+            ymin = float(ymin)
+        except ValueError:
+            err_string += 'Min Y must be a float. '
+
+        try:
+            ymax = float(ymax)
+            if 'Min Y' not in err_string and ymax <= ymin:
+                err_string += 'Max Y must be greater than min Y. '
+        except ValueError:
+            err_string += 'Max Y must be a float. '
+
+        if len(err_string) == 0:
+            # Update range if no errors
+            self.graph_widget.setRange(xRange=[xmin, xmax], yRange=[ymin, ymax])
+        else:
+            self.load_label.setText(err_string)
+            # Parse error string to determine which boxes to turn red
+            # If we have a min > max error it will turn both problematic boxes red!
+            if 'Min X' in err_string or 'min X' in err_string:
+                self.xmin_box.setStyleSheet(f"border: 1px solid red;")
+            if 'Max X' in err_string:
+                self.xmax_box.setStyleSheet(f"border: 1px solid red;")
+            if 'Min Y' in err_string or 'min Y' in err_string:
+                self.ymin_box.setStyleSheet(f"border: 1px solid red;")
+            if 'Max Y' in err_string:
+                self.ymax_box.setStyleSheet(f"border: 1px solid red;")
 
 class StableTable(qt.QTableWidget):
     """

@@ -41,22 +41,21 @@ def wb08read(data_path):
     kw=np.array(kw)
     return wavew,nw,kw
 
-def get_nk(wavel, comps, mixmodel='Molecular'):
+def get_nk(wavels, comps, mixmodel='Molecular', returnmode=['full']):
     """
     Determines complex index of refraction n + ki of a material given its composition and the incident wavelength.
 
     :param wavel: Float wavelength in microns
     :param comps: Dictionary of string compositions of material and given volume fractions
-    :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'
+    :param mixmodel: String mixture model to use, only 'Molecular' is supported
+    :param returnmode: List indicating whether to return full wavels, ns, ks array (['full']), or whether to 
+                       return only one n, k pair (['single', wavel])
     :returns: Float n (refractive index) at the given wavelength
               Float k (absorption coefficient) at the given wavelength
     """
 
     # Create empty arrays to hold all the data
-    dielectrics = []
-    fs = []
-    ns = []
-    ks = []
+    dielectrics, fs, temp_ns, temp_ks = [], [], [], []
 
     for comp in comps.keys():
         # Material files MUST be formatted with "_constants.csv" at the end!
@@ -70,31 +69,36 @@ def get_nk(wavel, comps, mixmodel='Molecular'):
         # Interpolate to given wavelength
         nxfunc=sp.interpolate.interp1d(wavex,nx)
         kxfunc=sp.interpolate.interp1d(wavex,kx)
-        ns.append(nxfunc(wavel))
-        ks.append(kxfunc(wavel))
+        temp_ns.append(nxfunc(wavels))
+        temp_ks.append(kxfunc(wavels))
 
-        dielectrics.append((ns[-1]**2 - ks[-1]**2) + 1j*2*ns[-1]*ks[-1]) # Compute dielectric
+        last_ns = np.asarray(temp_ns[-1])
+        last_ks = np.asarray(temp_ks[-1])
+
+        dielectrics.append(((last_ns**2 - last_ks**2) + 1j*2*last_ns*last_ks).tolist()) # Compute dielectrics across all wavelengths
         fs.append(float(comps[comp])) # Append v/v fraction for material
 
-    if len(dielectrics) == 1:
-        return ns[0], ks[0] # Return single material n, k if only one material
+    if len(dielectrics) == 1 or mixmodel == 'Areal':
+        ns = temp_ns[0]
+        ks = temp_ks[0] # Return single material n, k if only one material
     else:
         if mixmodel == 'Molecular':
             # Molecular mixture requires that we consider particles of evenly mixed materials
             # This requires considering the dielectric constants of each
-            eps_x = dielectrics[0]*(1 + 3*fs[1]*(dielectrics[1]-dielectrics[0])/(dielectrics[1]+2*dielectrics[0])/(1 - fs[1]*(dielectrics[1]-dielectrics[0])/(dielectrics[1]+2*dielectrics[0])))
-            n=np.sqrt(.5)*np.sqrt(np.sqrt(np.real(eps_x)**2+np.imag(eps_x)**2)+np.real(eps_x))
-            k=np.sqrt(.5)*np.sqrt(np.sqrt(np.real(eps_x)**2+np.imag(eps_x)**2)-np.real(eps_x))
-            return n,k
-        elif mixmodel == 'Areal':
-            # Areal mixture assumes that we have a mixture of particles made of separate materials
-            # We can simply do a weighted average in this case
-            n = np.sum([ns[i] * fs[i] for i in range(len(ns))])
-            k = np.sum([ks[i] * fs[i] for i in range(len(ks))])
-            return n,k
+            first_mat = np.asarray(dielectrics[0])
+            second_mat = np.asarray(dielectrics[1])
+            eps_x = first_mat*(1 + 3*fs[1]*(second_mat-first_mat)/(second_mat+2*first_mat)/(1 - fs[1]*(second_mat-first_mat)/(second_mat+2*first_mat)))
+            ns=(np.sqrt(.5)*np.sqrt(np.sqrt(np.real(eps_x)**2+np.imag(eps_x)**2)+np.real(eps_x))).tolist()
+            ks=(np.sqrt(.5)*np.sqrt(np.sqrt(np.real(eps_x)**2+np.imag(eps_x)**2)-np.real(eps_x))).tolist()
         else:
             # Handle the case of an improper argument
             raise ValueError(f"Mixture model {mixmodel} not supported.")
+    
+    if returnmode[0] == 'full':
+        return ns, ks
+    else:
+        wavel_idx = np.where(np.asarray(wavels) == returnmode[1])[0][0]
+        return ns[wavel_idx], ks[wavel_idx]
 
 def get_minmax_wavel(comp):
     """
@@ -223,117 +227,128 @@ def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, 
     solid_min_idx = np.where(solid_angles_degs == theta_min)[0][0] # Locate angle bounds within solid angles
     solid_max_idx = np.where(solid_angles_degs == theta_max)[0][0]
 
+    # Figure out whether to iterate over all materials and sum weighted reflectances (areal model)
+    # or all at once and get the averaged index of refraction (molecular model)
+    outer_range = comps.keys() if mixmodel == 'Areal' else range(1)
+
     for wavel in wavels:
-        sizeparams = 2 * np.pi * radii / wavel # This is the size parameter by which we gague small and large particles
-        small_idxs = np.where(sizeparams <= x0)[0]
-        large_idxs = np.where(sizeparams > x0)[0]
-        small_sizes = sizeparams[small_idxs]
-        large_sizes = sizeparams[large_idxs]
-        small_diameters = diameters[small_idxs]
-        large_diameters = diameters[large_idxs]
-        small_dist = sizedists[small_idxs]
-        large_dist = sizedists[large_idxs]
+        # Create placeholders to sum up all weighted reflectances and taus
+        wavel_reflectances = np.zeros_like(angle_range)
+        wavel_tau = 0
+        for mat_idx in outer_range:
+            sizeparams = 2 * np.pi * radii / wavel # This is the size parameter by which we gague small and large particles
+            small_idxs = np.where(sizeparams <= x0)[0]
+            large_idxs = np.where(sizeparams > x0)[0]
+            small_sizes = sizeparams[small_idxs]
+            large_sizes = sizeparams[large_idxs]
+            small_diameters = diameters[small_idxs]
+            large_diameters = diameters[large_idxs]
+            small_dist = sizedists[small_idxs]
+            large_dist = sizedists[large_idxs]
 
-        # --- SMALL REGIME PARTICLES ---
-        # Compute index of refraction at given wavelength
-        n, k = get_nk(wavel, comps, mixmodel=mixmodel)
-        m = complex(n, k)
+            # --- SMALL REGIME PARTICLES ---
+            # Compute index of refraction at given wavelength
+            n, k = get_nk(wavels, ({mat_idx: comps[mat_idx]} if mixmodel == 'Areal' else comps), mixmodel=mixmodel, returnmode=['single', wavel])
+            m = complex(n, k)
 
-        SU = np.zeros_like(angle_range)
+            SU = np.zeros_like(angle_range)
 
-        if len(small_idxs > 0):
-            # Use PyMieScatt to compute scattering angles and intensities in the small regime
-            # Takes wavelength & diameters in nanometers, so need to convert from microns
-            theta1, SL, SR, SU_small = PyMie.SF_SD(m, wavel*1000, small_diameters*1000, small_dist,
-                                        minAngle=theta_min, maxAngle=theta_max,
-                                        angularResolution=1.0, space='theta')
+            if len(small_idxs > 0):
+                # Use PyMieScatt to compute scattering angles and intensities in the small regime
+                # Takes wavelength & diameters in nanometers, so need to convert from microns
+                theta1, SL, SR, SU_small = PyMie.SF_SD(m, wavel*1000, small_diameters*1000, small_dist,
+                                            minAngle=theta_min, maxAngle=theta_max,
+                                            angularResolution=1.0, space='theta')
+
+                # Calculate coefficients given the data, also applying conversions
+                qdict_small = PyMie.Mie_SD(m, wavel*1000., small_diameters*1000, small_dist, asDict=True)
+                bsca_small = qdict_small['Bsca'] * 1.e6 # Extract extinction coefficient bext
+
+                # Extract extinction coefficient. PyMieScatt applies 10^-6 scale factor assuming we
+                # input size distribution in inverse cubic centimeters, and so outputs inverse
+                # megameters. But we input inverse cubic microns, and we want our output in inverse
+                # meters. This will work perfectly, but we do need to undo the 10^-6 scale factor.
+                bext_small = qdict_small['Bext'] * 1.e6
+
+                SU += SU_small
+
+            if len(large_idxs > 0):
+                # --- LARGE REGIME: DIFFRACTION ---
+                P_large_diff = []
+
+                for theta in solid_angles:
+                    # For z = x * sin(theta)
+                    z = large_sizes * np.sin(theta)
+
+                    # Handle the theta = 0 limit where J1(z)/z -> 1/2
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        j1_term = sp.special.j1(z) / z
+                        j1_term[z == 0] = 0.5  # L'Hopital's rule limit
+
+                    # Exact physical optics diffraction
+                    d_x_unnormalized = (large_sizes**2 / 4 / np.pi) * (2 * j1_term)**2 * 0.5 * (1 + np.cos(theta)**2)
+                    integrand = d_x_unnormalized * np.pi * large_sizes**2 * large_dist
+                    P_large_diff.append(np.trapz(integrand, large_sizes))
+                
+                # Normalizing so that integral over all solid angles equals 1
+                diff_int_solidangles = 0.5 * np.trapz(P_large_diff * np.sin(solid_angles), solid_angles)
+                P_large_diff = (np.asarray(P_large_diff) / diff_int_solidangles)[solid_min_idx:solid_max_idx+1]
+
+                # --- LARGE REGIME: EXTERNAL REFLECTION ---
+                P_large_extref = 0.5*((np.sin(solid_angles / 2) - (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5)/(np.sin(solid_angles / 2) + (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5))**2 + 0.5 * ((np.abs(m)**2 * np.sin(solid_angles / 2) - (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5)/(np.abs(m)**2 * np.sin(solid_angles / 2) + (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5))**2
+                
+                # Normalizing so that integral over all solid angles equals 1
+                extref_int_solidangles = 0.5 * np.trapz(P_large_extref * np.sin(solid_angles), solid_angles)
+                P_large_extref = (P_large_extref / extref_int_solidangles)[solid_min_idx:solid_max_idx+1] # Normalize so integral over all solid angles equals 1
+
+                # --- LARGE REGIME: TRANSMISSION ---
+
+                # I have no idea how b relates to G or whatever so I just guessed G
+                P_large_trans = np.e * G**(-2*solid_angles/np.pi)
+
+                # Normalizing so that integral over all solid angles equals 1
+                trans_int_solidangles = 0.5 * np.trapz(P_large_trans * np.sin(solid_angles), solid_angles)
+                P_large_trans = (P_large_trans / trans_int_solidangles)[solid_min_idx:solid_max_idx+1]
+
+                # I have no idea how these combine but AI said so so I guess it's fine?
+                # Something about how we can just add these intensities but they have some weird Q factor attached
+                # Like for diffraction it's 0.5, external reflection something small, and transmission makes up the rest
+                # Is this physics accurate?
+                fresn_ref = extref_int_solidangles
+                qdict_large = PyMie.Mie_SD(m, wavel*1000., diameters[large_idxs]*1000, sizedists[large_idxs], asDict=True)
+                bsca_large = qdict_large['Bsca'] * 1.e6 # Extract extinction coefficient bext
+                SU_large_diff = P_large_diff * 0.5 * bsca_large * np.pi / ((wavel*1000)**2)
+                SU_large_extref = P_large_extref * 0.5 * fresn_ref * bsca_large * np.pi / ((wavel*1000)**2)
+                SU_large_trans = P_large_trans * 0.5 * (1 - fresn_ref) * bsca_large * np.pi / ((wavel*1000)**2)
+
+                SU += (SU_large_diff + SU_large_extref + SU_large_trans) * r # Apparently we have to scale it up by some factor that prioritizes larger particles since they have more "dents"
+
 
             # Calculate coefficients given the data, also applying conversions
-            qdict_small = PyMie.Mie_SD(m, wavel*1000., small_diameters*1000, small_dist, asDict=True)
-            bsca_small = qdict_small['Bsca'] * 1.e6 # Extract extinction coefficient bext
+            qdict_tot = PyMie.Mie_SD(m, wavel*1000., diameters*1000, sizedists, asDict=True)
+            bsca_tot = qdict_tot['Bsca'] * 1.e6 # Extract extinction coefficient bext
 
             # Extract extinction coefficient. PyMieScatt applies 10^-6 scale factor assuming we
             # input size distribution in inverse cubic centimeters, and so outputs inverse
             # megameters. But we input inverse cubic microns, and we want our output in inverse
             # meters. This will work perfectly, but we do need to undo the 10^-6 scale factor.
-            bext_small = qdict_small['Bext'] * 1.e6
+            bext_tot = qdict_tot['Bext'] * 1.e6
 
-            SU += SU_small
+            # Calculate tau from first available reflectance if not provided
+            # Note that given_ifs will be sliced such that the first element is at theta_min, so SU is indexed accordingly
+            if tau is None:
+                tau = ref_if * bext_tot * 4 * np.pi / (SU[0] * (wavel*1000)**2)
 
-        if len(large_idxs > 0):
-            # --- LARGE REGIME: DIFFRACTION ---
-            P_large_diff = []
-
-            for theta in solid_angles:
-                # For z = x * sin(theta)
-                z = large_sizes * np.sin(theta)
-
-                # Handle the theta = 0 limit where J1(z)/z -> 1/2
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    j1_term = sp.special.j1(z) / z
-                    j1_term[z == 0] = 0.5  # L'Hopital's rule limit
-
-                # Exact physical optics diffraction
-                d_x_unnormalized = (large_sizes**2 / 4 / np.pi) * (2 * j1_term)**2 * 0.5 * (1 + np.cos(theta)**2)
-                integrand = d_x_unnormalized * np.pi * large_sizes**2 * large_dist
-                P_large_diff.append(np.trapz(integrand, large_sizes))
-            
-            # Normalizing so that integral over all solid angles equals 1
-            diff_int_solidangles = 0.5 * np.trapz(P_large_diff * np.sin(solid_angles), solid_angles)
-            P_large_diff = (np.asarray(P_large_diff) / diff_int_solidangles)[solid_min_idx:solid_max_idx+1]
-
-            # --- LARGE REGIME: EXTERNAL REFLECTION ---
-            P_large_extref = 0.5*((np.sin(solid_angles / 2) - (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5)/(np.sin(solid_angles / 2) + (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5))**2 + 0.5 * ((np.abs(m)**2 * np.sin(solid_angles / 2) - (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5)/(np.abs(m)**2 * np.sin(solid_angles / 2) + (np.abs(m)**2 - 1 + np.sin(solid_angles / 2)**2)**0.5))**2
-            
-            # Normalizing so that integral over all solid angles equals 1
-            extref_int_solidangles = 0.5 * np.trapz(P_large_extref * np.sin(solid_angles), solid_angles)
-            P_large_extref = (P_large_extref / extref_int_solidangles)[solid_min_idx:solid_max_idx+1] # Normalize so integral over all solid angles equals 1
-
-            # --- LARGE REGIME: TRANSMISSION ---
-
-            # I have no idea how b relates to G or whatever so I just guessed G
-            P_large_trans = np.e * G**(-2*solid_angles/np.pi)
-
-            # Normalizing so that integral over all solid angles equals 1
-            trans_int_solidangles = 0.5 * np.trapz(P_large_trans * np.sin(solid_angles), solid_angles)
-            P_large_trans = (P_large_trans / trans_int_solidangles)[solid_min_idx:solid_max_idx+1]
-
-            # I have no idea how these combine but AI said so so I guess it's fine?
-            # Something about how we can just add these intensities but they have some weird Q factor attached
-            # Like for diffraction it's 0.5, external reflection something small, and transmission makes up the rest
-            # Is this physics accurate?
-            fresn_ref = extref_int_solidangles
-            qdict_large = PyMie.Mie_SD(m, wavel*1000., diameters[large_idxs]*1000, sizedists[large_idxs], asDict=True)
-            bsca_large = qdict_large['Bsca'] * 1.e6 # Extract extinction coefficient bext
-            SU_large_diff = P_large_diff * 0.5 * bsca_large * np.pi / ((wavel*1000)**2)
-            SU_large_extref = P_large_extref * 0.5 * fresn_ref * bsca_large * np.pi / ((wavel*1000)**2)
-            SU_large_trans = P_large_trans * 0.5 * (1 - fresn_ref) * bsca_large * np.pi / ((wavel*1000)**2)
-
-            SU += (SU_large_diff + SU_large_extref + SU_large_trans) * r # Apparently we have to scale it up by some factor that prioritizes larger particles since they have more "dents"
-
-
-        # Calculate coefficients given the data, also applying conversions
-        qdict_tot = PyMie.Mie_SD(m, wavel*1000., diameters*1000, sizedists, asDict=True)
-        bsca_tot = qdict_tot['Bsca'] * 1.e6 # Extract extinction coefficient bext
-
-        # Extract extinction coefficient. PyMieScatt applies 10^-6 scale factor assuming we
-        # input size distribution in inverse cubic centimeters, and so outputs inverse
-        # megameters. But we input inverse cubic microns, and we want our output in inverse
-        # meters. This will work perfectly, but we do need to undo the 10^-6 scale factor.
-        bext_tot = qdict_tot['Bext'] * 1.e6
-
-        # Calculate tau from first available reflectance if not provided
-        # Note that given_ifs will be sliced such that the first element is at theta_min, so SU is indexed accordingly
-        if tau is None:
-            tau = ref_if * bext_tot * 4 * np.pi / (SU[0] * (wavel*1000)**2)
-
-        # Calculate reflectance using scattering data, converting wavelength to nanometers. SU
-        # is in the same units as sizedists, meaning we have square nanometers over cubic microns,
-        # which is the same as inverse meters. Our units thus cancel assuming tau and reflectances
-        # should be unitless.
-        # If done correctly, the reflectances at index thetamin_idx should equal the given reflectance at that angle
-        reflectances.append(np.asarray(SU)*(wavel*1000)**2/(4*np.pi)*tau/bext_tot)
-        taus.append(tau)
+            # Calculate reflectance using scattering data, converting wavelength to nanometers. SU
+            # is in the same units as sizedists, meaning we have square nanometers over cubic microns,
+            # which is the same as inverse meters. Our units thus cancel assuming tau and reflectances
+            # should be unitless.
+            # If done correctly, the reflectances at index thetamin_idx should equal the given reflectance at that angle
+            wavel_reflectances += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * np.asarray(SU)*(wavel*1000)**2/(4*np.pi)*tau/bext_tot
+            wavel_tau += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau
+        
+        reflectances.append(wavel_reflectances.tolist())
+        taus.append(wavel_tau)
 
     # Return a slice of reflectances at the appropriate angles, as well as tau
     return reflectances, taus
@@ -356,24 +371,26 @@ def henyey_greenstein(angle, gweights):
         hg_term += w/(4*np.pi)*(1-g**2)/(1+g**2-2*g*np.cos(angle))**1.5
     return hg_term
 
-def output_graph(ifvangle, sensor, comps, mixmodel, datamodel, fitmodel, param, tau):
+def output_graph(graphmode, sensor, comps, mixmodel, datamodel, fitmodel, param, tau, wavelbounds=(0, np.inf)):
     """
     A function that takes input scattering data as might be observed by one of Europa Clipper's instruments,
     as well as additional data about the fit and the plot type desired, and outputs the corresponding x and y
     arrays.
 
-    :param ifvangle: Boolean. True indicates output x array will be scattering angles, false means it will be
-                     wavelengths.
+    :param graphmode: Integer, indicates whether to output reflectance vs. wavelength (0), surface reflectance
+                     vs. wavelength (1), or reflectance vs. scattering angle (2)
     :param sensor: String sensor from which to read wavelength range
     :param comps: Dictionary with keys as materials and values as volume fractions of materials
     :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'
     :param datamodel: String data model to use, either 'G-ring-like' or 'E-ring-like'
     :param fitmodel: String for fit model to use, either 'Mie' or 'Henyey-Greenstein'
-    :param param: Fixed parameter to base reflectances on. Float wavelength if ifvangle = True, int scattering
-                  angle if False
+    :param param: Fixed parameter to base reflectances on. Float wavelength if graphmode = 0, float effective
+                  grain size if graphmode = 1, int scattering angle if graphmode = 2
     :param tau: Float optical depth
+    :param wavelbounds: Tuple (float, float) wavelength bounds as established by the composition, representing
+                        data available for index of refraction interpolation
 
-    :returns: List containing x data values (integer if scattering angles, float if wavelengths)
+    :returns: List containing x data values
               List containing float reflectance data values
     """
     if datamodel == "G-ring-like":
@@ -383,7 +400,11 @@ def output_graph(ifvangle, sensor, comps, mixmodel, datamodel, fitmodel, param, 
     disttype = pvars.DISTTYPE_ARR[type_idx] # Get information about the size distribution from the array above
 
     # Angle mode
-    if ifvangle:
+    if graphmode == 1:
+        wavel_range = pvars.INSTRUMENTS[sensor] # Plot over range of all available wavelengths in the sensor
+        xarr = np.arange(round(max(wavelbounds[0][1], wavel_range[0]), 5), round(min(wavelbounds[1][1], wavel_range[1]), 5) + 1e-20, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
+        reflectances = fresn_surface_reflectances(xarr, param, comps=comps, mixmodel=mixmodel)
+    elif graphmode == 2:
         xarr = np.arange(0, 181, 1) # Declare array of angles 0 to 180 degrees
         # Get reflectances. Programmed so that angles start, stop, and step the same way as xarr
         reflectances = angle_mie_reflectances(disttype[0], disttype[1], disttype[2], theta_min=0, theta_max=180, wavels=[param], comps=comps, mixmodel=mixmodel, nsize=pvars.NSIZE, tau=tau)[0][0]
@@ -415,9 +436,9 @@ def output_graph(ifvangle, sensor, comps, mixmodel, datamodel, fitmodel, param, 
             # Final Henyey-Greenstein reflectances
             reflectances = henyey_greenstein(np.radians(xarr), [[init_hg_params[1], init_hg_params[0] * factor], [init_hg_params[3], init_hg_params[2] * factor]])
     # Wavelength mode
-    else:
+    elif graphmode == 0:
         wavel_range = pvars.INSTRUMENTS[sensor] # Plot over range of all available wavelengths in the sensor
-        xarr = np.arange(wavel_range[0], wavel_range[1] + 0.01, 0.01) # Assume a 10 nm resolution
+        xarr = np.arange(round(max(wavelbounds[0][1], wavel_range[0]), 5), round(min(wavelbounds[1][1], wavel_range[1]), 5) + 1e-20, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
         reflectances = angle_mie_reflectances(disttype[0], disttype[1], disttype[2], theta_min=param, theta_max=param, wavels=xarr, comps=comps, mixmodel=mixmodel, nsize=pvars.NSIZE, tau=tau)[0]
         # angle_mie_reflectances returns a weird column array shape [[element1], [element2], [element3]]
         # Need to make array not as deep
@@ -425,6 +446,61 @@ def output_graph(ifvangle, sensor, comps, mixmodel, datamodel, fitmodel, param, 
 
     return xarr.tolist(), reflectances # xarr should not be a numpy array because PyQt6 doesn't know what numpy is for some reason
 
+def fresn_surface_reflectances(wavels, param, comps={vars.COMP, 1}, mixmodel='Molecular'):
+    """
+    Compute the surface albedo of a material over various wavelengths using the Fresnel equations.
+
+    :param wavels: List of float wavelengths at which to evaluate
+    :param comps: Dictionary with keys as materials and values as their respective v/v fractions
+    :param param: Float effective grain size (average particle radius)
+    :param mixmodel: String, either 'Molecular' (averaging optical constants) or 'Areal' (averaging reflectances)
+    :returns: List of reflectances evaluated. Shape len(wavels)
+    """
+    # Figure out whether to iterate over all materials and sum weighted reflectances (areal model)
+    # or all at once and get the averaged index of refraction (molecular model)
+    outer_range = comps.keys() if mixmodel == 'Areal' else range(1)
+    reflectances = np.zeros_like(wavels)
+
+    # Loop over all materials and average reflectance if areal
+    # Otherwise, evaluate all at once and average optical constants
+    for mat_idx in outer_range:
+        n, k = get_nk(wavels, ({mat_idx: comps[mat_idx]} if mixmodel == 'Areal' else comps), mixmodel=mixmodel)
+        reflectances += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * surface_albedo(wavels, n, k, param)
+
+    return reflectances
+
+def surface_albedo(wave,n,k,s):
+    """
+    Solves the Fresnel equations for a given range of wavelengths and optical constants n and k with effective
+    grain size s to compute the surface albedo of a material.
+
+    :param wave: List of float wavelengths at which to evaluate
+    :param n: Float index of refraction of material
+    :param k: Float index of absorption of material
+    :param s: Float effective grain size
+    :returns: List of reflectances (albedos) evaluated. Shape len(wave)
+    """
+    nnx=np.size(wave)
+    theta1=np.linspace(0,np.pi/4,100)
+    dtheta1=theta1[1]-theta1[0]
+    theta2=theta1+np.pi/4
+    alb1=np.zeros(nnx)
+    for i in range(nnx):
+        aS=4*np.pi*k[i]/wave[i]*s
+        rs1=(np.cos(theta1)-(n[i]+k[i]*1.0j)*np.sqrt(1-np.sin(theta1)**2/n[i]**2))/(np.cos(theta1)+(n[i]+k[i]*1.0j)*np.sqrt(1-np.sin(theta1)**2/n[i]**2))
+        rp1=((n[i]+k[i]*1.0j)*np.cos(theta1)-np.sqrt(1-np.sin(theta1)**2/n[i]**2))/((n[i]+k[i]*1.0j)*np.cos(theta1)+np.sqrt(1-np.sin(theta1)**2/n[i]**2))
+        ro1=.5*(np.abs(rs1)**2+np.abs(rp1)**2)
+        rb=np.sum(2*ro1*np.cos(theta2)*np.sin(theta2))*dtheta1
+        rs2=(np.cos(theta2[np.sin(theta2)<n[i]])-(n[i]+k[i]*1.0j)*np.sqrt(1-np.sin(theta2[np.sin(theta2)<n[i]])**2/n[i]**2))/(np.cos(theta2[np.sin(theta2)<n[i]])+(n[i]+k[i]*1.0j)*np.sqrt(1-np.sin(theta2[np.sin(theta2)<n[i]])**2/n[i]**2))
+        rp2=((n[i]+k[i]*1.0j)*np.cos(theta2[np.sin(theta2)<n[i]])-np.sqrt(1-np.sin(theta2[np.sin(theta2)<n[i]])**2/n[i]**2))/((n[i]+k[i]*1.0j)*np.cos(theta2[np.sin(theta2)<n[i]])+np.sqrt(1-np.sin(theta2[np.sin(theta2)<n[i]])**2/n[i]**2))
+        ro2=.5*(np.abs(rs2)**2+np.abs(rp2)**2)
+        rf=np.sum(2*ro2*np.cos(theta2[np.sin(theta2)<n[i]])*np.sin(theta2[np.sin(theta2)<n[i]]))*dtheta1
+        re=rb+rf
+        ri=1-(1-re)/n[i]**2
+        rrb=rb+0.5*(1-re)*(1-ri)*ri*np.exp(-2*aS)/(1-ri*np.exp(-aS))
+        rrf=rf+(1-re)*(1-ri)*np.exp(-aS)+0.5*(1-re)*(1-ri)*ri*np.exp(-2*aS)/(1-ri*np.exp(-aS))
+        alb1[i]=(1+rrb**2-rrf**2)/2/rrb-np.sqrt((1+rrb**2-rrf**2)**2/4/rrb**2-1)
+    return alb1
 
 def RMSE(y_act, y_pred):
     """
