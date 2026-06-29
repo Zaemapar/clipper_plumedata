@@ -1,8 +1,8 @@
 import sys
 import pyqtgraph as pg
 import pyqtgraph.exporters
-import PyQt6.QtWidgets as qt
-import PyQt6.QtCore as qc
+import PyQt5.QtWidgets as qt
+import PyQt5.QtCore as qc
 import pred_vars as vars
 import utils
 import os

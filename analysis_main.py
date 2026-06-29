@@ -5,7 +5,7 @@ import pred_vars as vars
 import gui
 import os
 import sys
-from PyQt6.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication
 
 """def power_output():
     # Make directory to hold the plot

@@ -9,9 +9,6 @@ import pred_vars as pvars
 import os
 import sys
 
-G = 5
-r = 2
-
 def wb08read(data_path):
     """
     Extracts information on complex index of refraction from provided datasheets for a given material.
@@ -209,6 +206,8 @@ def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, 
     :returns: 2D Array of reflectance values between theta_min, theta_max, and the min and max of wavels. Shape (len(wavels), len(angles))
               Array for calculated optical depths at each wavelength
     """
+    G = 5
+    r = 1.3
 
     #Compute the nominal (unnormalized) particle size distribution
     radii=np.linspace(smin, smax, nsize)
@@ -220,7 +219,7 @@ def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, 
     reflectances = []
     taus = []
 
-    x0 = 5000 # Cutoff size parameter to define small and large particles
+    x0 = 300000000000 # Cutoff size parameter to define small and large particles
     angle_range = np.radians(np.arange(theta_min, theta_max + 1, 1)) # Range of angles in radians
     solid_angles_degs = np.arange(0, 181, 1) # All solid angles, for integrals
     solid_angles = np.radians(solid_angles_degs)
@@ -275,10 +274,10 @@ def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, 
             if len(large_idxs > 0):
                 # --- LARGE REGIME: DIFFRACTION ---
                 P_large_diff = []
-
+                rescaled_sizes = large_sizes * np.sqrt(r) # Pollack & Cuzzi mention needing to account for larger cross sections of irregular particles
                 for theta in solid_angles:
                     # For z = x * sin(theta)
-                    z = large_sizes * np.sin(theta)
+                    z = rescaled_sizes * np.sin(theta)
 
                     # Handle the theta = 0 limit where J1(z)/z -> 1/2
                     with np.errstate(divide='ignore', invalid='ignore'):
@@ -286,9 +285,13 @@ def angle_mie_reflectances(smin, smax, powlaw, theta_min=vars.ANGLE_LOWERBOUND, 
                         j1_term[z == 0] = 0.5  # L'Hopital's rule limit
 
                     # Exact physical optics diffraction
-                    d_x_unnormalized = (large_sizes**2 / 4 / np.pi) * (2 * j1_term)**2 * 0.5 * (1 + np.cos(theta)**2)
-                    integrand = d_x_unnormalized * np.pi * large_sizes**2 * large_dist
-                    P_large_diff.append(np.trapz(integrand, large_sizes))
+                    d_x_unnormalized = (rescaled_sizes**2 / 4 / np.pi) * (2 * j1_term)**2 * 0.5 * (1 + np.cos(theta)**2)
+                    integrand = d_x_unnormalized * np.pi * rescaled_sizes**2 * large_dist
+                    if theta < np.pi / 2:
+                        P_large_diff.append(np.trapz(integrand, rescaled_sizes))
+                    else:
+                        # Bessel function has a periodic spike. Pollack and Cuzzi assume this term drops to 0 in the backscatter region anyways
+                        P_large_diff.append(0)
                 
                 # Normalizing so that integral over all solid angles equals 1
                 diff_int_solidangles = 0.5 * np.trapz(P_large_diff * np.sin(solid_angles), solid_angles)

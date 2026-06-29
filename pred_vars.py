@@ -1,3 +1,5 @@
+import numpy as np
+
 # --- PREDICTION FILE PARAMETERS ---
 TAU = 1e-6 # Optical depth
 INSTRUMENTS = {'NAC': [0.358, 1.050], 'WAC': [0.370, 1.050], 'MISE': [0.8, 5], 'Europa-UVS': [0.055, 0.206]}
