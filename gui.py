@@ -64,17 +64,27 @@ class MainWindow(qt.QMainWindow):
         # Dropdown list for available data models (G-ring, E-ring, etc)
         self.dist_label = qt.QLabel("Data Model:")
         self.dist_model = qt.QComboBox()
-        self.dist_model.addItems(vars.DATA_MODELS)
+        self.dist_model.addItems(vars.DATA_MODELS.keys())
+        self.dist_model.addItems(['Custom'])
+        # These objects will be shown when the user clicks the 'Custom' option for data models
+        self.smin_label = None
+        self.smin_box = None
+        self.smax_label = None
+        self.smax_box = None
+        self.powlaw_label = None
+        self.powlaw_box = None
+        self.G_label = None
+        self.G_box = None
+        self.r_label = None
+        self.r_box = None
+        self.x0_label = None
+        self.x0_box = None
 
-        # Radio buttons to toggle between Mie and Henyey-Greenstein theory, or just Mie for reflectance vs wavelength plots
+        # Dropdown list to select which scattering theory to use in reflectance vs. angle and reflectance vs. wavelength graphs
         self.fit_label = qt.QLabel("Fit Model:")
-        self.model_a = qt.QRadioButton("Mie")
-        self.model_a.setChecked(True) # By default, Mie is used, mainly because ref vs. wavel can't use HG
-        self.model_b = qt.QRadioButton("Henyey-Greenstein")
-        self.fit_model = qt.QButtonGroup() # Setting up a group to ensure only one can be checked
-        self.fit_model.addButton(self.model_a)
-        self.fit_model.addButton(self.model_b)
-        self.model_b.setVisible(False) # Default is reflectance vs wavelenght, therefore Henyey-Greenstein is not visible
+        self.fit_model = qt.QComboBox()
+        # By default, pure Mie is used. The others are to get different components of the Mie function. Henyey-Greenstein is not added yet as it is not supported in ref. vs. wavel. plots
+        self.fit_model.addItems(["Semi-Empirical Mie", "Pure Mie", "Mie Diffraction", "Mie External Reflection", "Mie Transmission"])
 
         # Entry box for manual optical depth input
         self.tau_label = qt.QLabel("Optical Depth:")
@@ -88,6 +98,10 @@ class MainWindow(qt.QMainWindow):
         self.input_box = qt.QLineEdit()
         self.input_box.setPlaceholderText("Input scattering angle in degrees")
         self.input_box.setText("90")
+
+        self.y_axis_label = qt.QLabel("Y Axis:")
+        self.y_axis = qt.QComboBox()
+        self.y_axis.addItems(["Reflectance", "Phase Function"])
 
         # Setting up radio buttons for X and Y scales, change between linear and logarithmic
         self.x_scale_label = qt.QLabel("X Scale:")
@@ -129,7 +143,7 @@ class MainWindow(qt.QMainWindow):
         self.graph_widget = pg.PlotWidget()
         self.graph_widget.setBackground('w') # Set background to white
         self.graph_widget.showGrid(x=True, y=True)
-        self.graph_widget.setLabel('left', 'Reflectance', units='I/F', color='k')
+        self.graph_widget.setLabel('left', self.y_axis.currentText(), units='I/F', color='k')
         self.graph_widget.setLabel('bottom', 'Wavelength', units='μm', color='k')
         self.graph_widget.getAxis('bottom').setPen(grid_pen) # Pen ensures axes and numbers are black and thick
         self.graph_widget.getAxis('left').setPen(grid_pen)
@@ -147,15 +161,19 @@ class MainWindow(qt.QMainWindow):
 
         # Setting up the min and max bounds for x and y
         self.xmin_label = qt.QLabel("Min X:")
+        self.xmin_label.setStyleSheet("color: black;")
         self.xmin_box = qt.QLineEdit()
         self.xmin_box.setMaximumWidth(50)
         self.xmax_label = qt.QLabel("Max X:")
+        self.xmax_label.setStyleSheet("color: black;")
         self.xmax_box = qt.QLineEdit()
         self.xmax_box.setMaximumWidth(50)
         self.ymin_label = qt.QLabel("Min Y:")
+        self.ymin_label.setStyleSheet("color: black;")
         self.ymin_box = qt.QLineEdit()
         self.ymin_box.setMaximumWidth(50)
         self.ymax_label = qt.QLabel("Max Y:")
+        self.ymax_label.setStyleSheet("color: black;")
         self.ymax_box = qt.QLineEdit()
         self.ymax_box.setMaximumWidth(50)
 
@@ -163,14 +181,17 @@ class MainWindow(qt.QMainWindow):
         # Pressing the graph mode button toggles between ref vs wavel and ref vs angle
         self.graph_mode_button.clicked.connect(self.mode_toggle)
 
+        # Changing the y-axis will reset the window and replot the data
+        self.y_axis.currentTextChanged.connect(self.change_yaxis)
+
         # Pressing scale radio buttons updates scale
         self.x_scale.buttonClicked.connect(self.update_scale)
         self.y_scale.buttonClicked.connect(self.update_scale)
 
         # Changing anything about the dataset (instrument, comp, model, tau, etc) replots the data
         self.instrument.currentTextChanged.connect(self.update_graph)
-        self.dist_model.currentTextChanged.connect(self.update_graph)
-        self.fit_model.buttonClicked.connect(self.update_graph)
+        self.dist_model.currentTextChanged.connect(self.change_distmodel)
+        self.fit_model.currentTextChanged.connect(self.change_fitmodel)
         self.tau_box.returnPressed.connect(self.update_graph)
         self.input_box.returnPressed.connect(self.update_graph)
 
@@ -203,8 +224,10 @@ class MainWindow(qt.QMainWindow):
         def flag_dragged():
             self.graph_was_dragged = True
         self.graph_widget.getViewBox().sigRangeChangedManually.connect(flag_dragged)
-        # Store the original mouse release to avoid breaking PyQt6's internal math
+
+        # Store the original mouse release/scroll wheel to avoid breaking PyQt6's internal math
         self._original_mouse_release = self.graph_widget.mouseReleaseEvent
+        self._original_wheel = self.graph_widget.wheelEvent
 
         def click_release(event):
             """
@@ -220,9 +243,20 @@ class MainWindow(qt.QMainWindow):
                 # Reset the flag for the next time
                 self.graph_was_dragged = False
                 self.rst_boxes() # Reset bounds boxes
+
+        def scroll_wheel(event):
+            """
+            A function that intercepts a scroll zoom update to the graph and updates the bound boxes
+            dynamically.
+
+            :param event: Keyboard input event to watch for
+            """
+            self._original_wheel(event) # Keep the original scrolling
+            self.rst_boxes() # Reset bounds boxes
             
-        # Override default mouse release event
+        # Override default mouse release and scroll events
         self.graph_widget.mouseReleaseEvent = click_release
+        self.graph_widget.wheelEvent = scroll_wheel
 
         # --- LAYOUT ---
         # Items are arranged in (row, column, rowspan, columnspan)
@@ -251,26 +285,32 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.dist_label,  7, 0, 1, 1)
         self.layout.addWidget(self.dist_model, 7, 1, 1, 2)
         self.layout.addWidget(self.fit_label, 8, 0, 1, 1)
-        self.layout.addWidget(self.model_a, 8, 1, 1, 1)
-        self.layout.addWidget(self.model_b, 8, 2, 1, 1)
+        self.layout.addWidget(self.fit_model, 8, 1, 1, 2)
         self.layout.addWidget(self.tau_label, 9, 0, 1, 1)
         self.layout.addWidget(self.tau_box, 9, 1, 1, 2)
         self.layout.addWidget(self.input_label, 10, 0, 1, 1)
         self.layout.addWidget(self.input_box, 10, 1, 1, 2)
-        self.layout.addWidget(self.x_scale_label, 11, 0, 1, 1)
-        self.layout.addWidget(self.x_linear, 11, 1, 1, 1)
-        self.layout.addWidget(self.x_log, 11, 2, 1, 1)
-        self.layout.addWidget(self.y_scale_label, 12, 0, 1, 1)
-        self.layout.addWidget(self.y_linear, 12, 1, 1, 1)
-        self.layout.addWidget(self.y_log, 12, 2, 1, 1)
-        self.layout.addWidget(self.load_label, 13, 0, 2, 2)
+        self.layout.addWidget(self.y_axis_label, 11, 0, 1, 1)
+        self.layout.addWidget(self.y_axis, 11, 1, 1, 2)
+        self.layout.addWidget(self.x_scale_label, 12, 0, 1, 1)
+        self.layout.addWidget(self.x_linear, 12, 1, 1, 1)
+        self.layout.addWidget(self.x_log, 12, 2, 1, 1)
+        self.layout.addWidget(self.y_scale_label, 13, 0, 1, 1)
+        self.layout.addWidget(self.y_linear, 13, 1, 1, 1)
+        self.layout.addWidget(self.y_log, 13, 2, 1, 1)
+        self.layout.addWidget(self.load_label, 14, 0, 2, 2)
         
         # Base parameters track conditions of each plot on the graph, used for tracking changes
         self.base_params = [[self.instrument.currentText(),
                     {self.comps[0][0].currentText(), self.comps[0][1].text()},
                     'Molecular', # Mixture model is not displayed at first, so must set to default
-                    self.dist_model.currentText(),
-                    self.fit_model.checkedButton().text(),
+                    vars.DATA_MODELS['G-ring-like'][0][0],
+                    vars.DATA_MODELS['G-ring-like'][0][1],
+                    vars.DATA_MODELS['G-ring-like'][0][2], # Get initial data model parameters
+                    vars.DATA_MODELS['G-ring-like'][0][3],
+                    vars.DATA_MODELS['G-ring-like'][0][4],
+                    vars.DATA_MODELS['G-ring-like'][0][5],
+                    self.fit_model.currentText(),
                     self.tau_box.text(),
                     self.input_box.text()]]
         self.legend_idxs = [] # Array to hold base parameter indexes to include in the legends, i.e. those that have changed
@@ -287,24 +327,61 @@ class MainWindow(qt.QMainWindow):
 
         :param self: MainWindow object
         """
+        self.clear_graph() # Clear graph first
+
         # First ensure all missing widgets are displayed upon a mode change
         if self.graphmode == 1:
-            self.mknewrow(7, 3)
-            self.layout.addWidget(self.dist_label,  7, 0, 1, 1)
+            self.mknewrow(self.row_widget(self.input_label), 2) # Tau may/may not be added later
+            self.layout.addWidget(self.dist_label, 7, 0, 1, 1)
             self.layout.addWidget(self.dist_model, 7, 1, 1, 2)
             self.layout.addWidget(self.fit_label, 8, 0, 1, 1)
-            self.layout.addWidget(self.model_a, 8, 1, 1, 1)
-            self.layout.addWidget(self.model_b, 8, 2, 1, 1)
-            self.layout.addWidget(self.tau_label, 9, 0, 1, 1)
-            self.layout.addWidget(self.tau_box, 9, 1, 1, 2)
+            self.layout.addWidget(self.fit_model, 8, 1, 1, 2)
             self.dist_label.setVisible(True)
             self.dist_model.setVisible(True)
             self.fit_label.setVisible(True)
-            self.model_a.setVisible(True)
-            self.model_b.setVisible(True)
-            self.tau_label.setVisible(True)
-            self.tau_box.setVisible(True)
+            self.fit_model.setVisible(True)
+            self.y_axis.removeItem(self.y_axis.findText("Albedo"))
+            self.y_axis.addItems(["Reflectance", "Phase Function"]) # Add back the options for phase function & reflectance for the y-axis
 
+            if self.smin_label is not None:
+                self.mknewrow(8, 3)
+                self.layout.addWidget(self.smin_label, 8, 0, 1, 1)
+                self.layout.addWidget(self.smin_box, 8, 1, 1, 2)
+                self.layout.addWidget(self.smax_label, 9, 0, 1, 1)
+                self.layout.addWidget(self.smax_box, 9, 1, 1, 2)
+                self.layout.addWidget(self.powlaw_label, 10, 0, 1, 1)
+                self.layout.addWidget(self.powlaw_box, 10, 1, 1, 2)
+                self.smin_label.setVisible(True)
+                self.smin_box.setVisible(True)
+                self.smax_label.setVisible(True)
+                self.smax_box.setVisible(True)
+                self.powlaw_label.setVisible(True)
+                self.powlaw_box.setVisible(True)
+
+                # If the fit model allows it, add G and r boxes
+                if self.r_label is not None:
+                    self.mknewrow(11, 1)
+                    self.layout.addWidget(self.r_label, 11, 0, 1, 1)
+                    self.layout.addWidget(self.r_box, 11, 1, 1, 2)
+                    self.r_label.setVisible(True)
+                    self.r_box.setVisible(True)
+                if self.G_label is not None:
+                    # Check to see if both G and r exist, and if so, add them on separate rows. Otherwise, add G to row 11.
+                    if self.r_label is not None:
+                        self.mknewrow(12, 1)
+                        self.layout.addWidget(self.G_label, 12, 0, 1, 1)
+                        self.layout.addWidget(self.G_box, 12, 1, 1, 2)
+                    else:
+                        self.mknewrow(11, 1)
+                        self.layout.addWidget(self.G_label, 11, 0, 1, 1)
+                        self.layout.addWidget(self.G_box, 11, 1, 1, 2)
+                    self.G_label.setVisible(True)
+                    self.G_box.setVisible(True)
+                if self.x0_label is not None:
+                    # x0 will ONLY show up in the case where both r and G show up, i.e. in the semi-empirical Mie
+                    self.mknewrow(13, 1)
+                    self.layout.addWidget(self.x0_label, 13, 0, 1, 1)
+                    self.layout.addWidget(self.x0_box, 13, 1, 1, 2)
 
         self.graphmode = int((self.graphmode + 1) % 3) # Switch the graph mode variable
         if self.graphmode == 0:
@@ -312,39 +389,90 @@ class MainWindow(qt.QMainWindow):
             self.input_label.setText("Scattering Angle:")
             self.input_box.setPlaceholderText("Input scattering angle in degrees")
             self.graph_widget.setLabel('bottom', 'Wavelength', units='μm')
-            self.model_b.setVisible(False) # Reflectance vs. wavelength does not have Henyey-Greenstein functionality
-            self.model_a.setChecked(True) # So we set it automatically to the remaining Mie option
+            # Remove Henyey-Greenstein from the dropdown list since it is not supported in ref. vs. wavel. plots
+            # If it's not in there, this will fail silently and not cause any issues
+            self.fit_model.removeItem(self.fit_model.findText("Henyey-Greenstein"))
         elif self.graphmode == 1:
             self.graph_mode_button.setText("Surface Reflectance vs. Wavelength")
             self.input_label.setText("Effective Grain Size:")
             self.input_box.setPlaceholderText("Input effective grain size in microns")
             self.graph_widget.setLabel('bottom', 'Wavelength', units='μm')
 
+            # If size distribution boxes are shown, get rid of them and switch sizedists to G-ring-like
+            if self.smin_label is not None:
+                # Shift rows up
+                self.mknewrow(self.row_widget(self.smin_label) + 3, -3)
+
+                # Remove widgets from display
+                self.layout.removeWidget(self.smin_label)
+                self.smin_label.setVisible(False)
+                self.layout.removeWidget(self.smin_box)
+                self.smin_box.setVisible(False)
+                self.layout.removeWidget(self.smax_label)
+                self.smax_label.setVisible(False)
+                self.layout.removeWidget(self.smax_box)
+                self.smax_box.setVisible(False)
+                self.layout.removeWidget(self.powlaw_label)
+                self.powlaw_label.setVisible(False)
+                self.layout.removeWidget(self.powlaw_box)
+                self.powlaw_box.setVisible(False)
+                
+                # If the fit model allows it, add G and r boxes
+                if self.r_label is not None:
+                    # Delete this row
+                    self.mknewrow(self.row_widget(self.r_label) + 1, -1)
+                    self.layout.removeWidget(self.r_label)
+                    self.r_label.setVisible(False)
+                    self.layout.removeWidget(self.r_box)
+                    self.r_box.setVisible(False)
+                if self.G_label is not None:
+                    # Delete this row
+                    self.mknewrow(self.row_widget(self.G_label) + 1, -1)
+                    self.layout.removeWidget(self.G_label)
+                    self.G_label.setVisible(False)
+                    self.layout.removeWidget(self.G_box)
+                    self.G_box.setVisible(False)
+                if self.x0_label is not None:
+                    # Delete this row
+                    self.mknewrow(self.row_widget(self.x0_label) + 1, -1)
+                    self.layout.removeWidget(self.x0_label)
+                    self.x0_label.setVisible(False)
+                    self.layout.removeWidget(self.x0_box)
+                    self.x0_box.setVisible(False)
+
             # Hide all unnecessary widgets (only the input param is needed)
+            self.mknewrow(self.row_widget(self.input_box), -2)
             self.layout.removeWidget(self.dist_label)
             self.dist_label.setVisible(False)
             self.layout.removeWidget(self.dist_model)
             self.dist_model.setVisible(False)
             self.layout.removeWidget(self.fit_label)
             self.fit_label.setVisible(False)
-            self.layout.removeWidget(self.model_a)
-            self.model_a.setVisible(False)
-            self.layout.removeWidget(self.model_b)
-            self.model_b.setVisible(False)
-            self.layout.removeWidget(self.tau_label)
-            self.tau_label.setVisible(False)
-            self.layout.removeWidget(self.tau_box)
-            self.tau_box.setVisible(False)
-            self.mknewrow(10, -3)
+            self.layout.removeWidget(self.fit_model)
+            self.fit_model.setVisible(False)
+
+            if self.tau_label.isVisible():
+                self.mknewrow(self.row_widget(self.input_box), -1)
+                self.layout.removeWidget(self.tau_label)
+                self.tau_label.setVisible(False)
+                self.layout.removeWidget(self.tau_box)
+                self.tau_box.setVisible(False)
+
+            # Remove phase function & reflectance from the y-axis dropdown list since it is not supported in surface spectra plots
+            # If it's not in there, this will fail silently and not cause any issues
+            self.y_axis.removeItem(self.y_axis.findText("Reflectance"))
+            self.y_axis.removeItem(self.y_axis.findText("Phase Function"))
+            self.y_axis.addItem("Albedo")
 
         elif self.graphmode == 2:
             self.graph_mode_button.setText("Reflectance vs. Scattering Angle")
             self.input_label.setText("Wavelength:")
             self.input_box.setPlaceholderText("Input wavelength in microns")
             self.graph_widget.setLabel('bottom', 'Scattering Angle', units='°') # Change bottom axis label
-            self.model_b.setVisible(True) # Reflectance vs. scattering angle has Henyey-Greenstein functionality
-        
-        self.clear_graph() # Clear graph when finished
+            if self.fit_model.findText("Henyey-Greenstein") < 0:
+                self.fit_model.addItem("Henyey-Greenstein") # Reflectance vs. scattering angle has Henyey-Greenstein functionality
+
+        self.change_yaxis() # Call just to make sure all shown parameters correspond to the y-axis of the plot
 
     def update_graph(self):
         """
@@ -357,14 +485,84 @@ class MainWindow(qt.QMainWindow):
         """
         self.all_borders('black') # Reset any previous errors
         self.load_label.setText("Updating...") # Status label changes to indicate loading
-        qt.QApplication.processEvents() # Force a screen update to render the status label and the box borders
+        
+        qt.QApplication.processEvents() # Force a screen update to render the status label and the box borders as well as the potentially changed distmodel
 
+        # Error checking for materials table if available
         err_message = '' # Will dynamically update to support multiple errors at once
         if len(self.comps) > 1:
             # Update materials checks to make sure there aren't errors specifically in the materials table
             err_message += self.update_materials()
 
+        # Error checking for smin, smax, powlaw boxes if available
+        if self.smin_label is not None:
+            smin_txt = self.smin_box.text()
+            smax_txt = self.smax_box.text()
+            powlaw_txt = self.powlaw_box.text()
 
+            # Smin checks
+            try:
+                smin = float(smin_txt)
+                if smin <= 0:
+                    err_message += "Min S must be greater than zero. "
+            except ValueError:
+                err_message += "Min S must be a float. "
+
+            # Smax checks
+            try:
+                smax = float(smax_txt)
+                if 'Min S' not in err_message and smax < smin:
+                    err_message += "Max S must be greater than min S. "
+                elif smax <= 0:
+                    err_message += "Max S must be greater than zero. "
+            except ValueError:
+                err_message += "Max S must be a float. "
+
+            # Powlaw checks
+            try:
+                powlaw = float(powlaw_txt)
+                if powlaw < 0:
+                    err_message += "Power law must be nonnegative (will be negated in calculations). "
+            except ValueError:
+                err_message += "Power law must be a float. "
+
+            # If r or G are included, check those
+            if self.r_label is not None:
+                try:
+                    r = float(self.r_box.text())
+                    if r < 0:
+                        err_message += "R must be nonnegative. "
+                except ValueError:
+                    err_message += "R must be a float. "
+            if self.G_label is not None:
+                try:
+                    G = float(self.G_box.text())
+                    if G <= 0:
+                        err_message += "G must be greater than 0. " # G gets passed into a natural log and must be greater than 0
+                except ValueError:
+                    err_message += "G must be a float. "
+            if self.x0_label is not None:
+                try:
+                    x0 = float(self.x0_box.text())
+                    if x0 < 0:
+                        err_message += "x0 must be nonnegative. "
+                except ValueError:
+                    err_message += "x0 must be a float. "
+
+            # Turn appropriate boxes red
+            if 'Min S' in err_message or 'min S' in err_message:
+                self.smin_box.setStyleSheet(f"border: 1px solid red;")
+            if 'Max S' in err_message:
+                self.smax_box.setStyleSheet(f"border: 1px solid red;")
+            if 'Power law' in err_message:
+                self.powlaw_box.setStyleSheet(f"border: 1px solid red;")    
+            if 'R ' in err_message: # Should include a space, just in case
+                self.r_box.setStyleSheet(f"border: 1px solid red;")
+            if 'G ' in err_message:
+                self.G_box.setStyleSheet(f"border: 1px solid red;")
+            if 'x0' in err_message:
+                self.x0_box.setStyleSheet(f"border: 1px solid red;")
+            
         # Read each parameter from the appropriate widget
         compositions = {}
         sensor = self.instrument.currentText()
@@ -488,7 +686,7 @@ class MainWindow(qt.QMainWindow):
                 self.plt_pen.setColor(pg.mkColor(COLOR_ARR[self.last_color_idx]))
                 
                 # Get the new x and y datasets if no errors
-                self.x_data, self.y_data = utils.output_graph(self.graphmode, updated_params[0], updated_params[1], updated_params[2], updated_params[3], updated_params[4], float(updated_params[6]), float(updated_params[5]), wavelbounds=(self.comp_min_wavel, self.comp_max_wavel))
+                self.x_data, self.y_data = utils.output_graph(self.graphmode, updated_params[0], updated_params[1], updated_params[2], [updated_params[3], updated_params[4], updated_params[5], updated_params[6], updated_params[7], updated_params[8]], updated_params[9], float(updated_params[11]), updated_params[10], wavelbounds=(self.comp_min_wavel, self.comp_max_wavel), output=self.y_axis.currentText())
                 
                 # Plot the dataset if not in the graph, else change the current unsaved graph
                 if self.ifs not in self.graph_widget.plotItem.items:
@@ -508,7 +706,7 @@ class MainWindow(qt.QMainWindow):
         else:
             self.load_label.setText(err_message)
             # Scan the error message for problematic variables and turn their boxes red
-            if 'Wavelength' in err_message or 'Scattering angle' in err_message or 'Effective grain size':
+            if 'Wavelength' in err_message or 'Scattering angle' in err_message or 'Effective grain size' in err_message:
                 self.input_box.setStyleSheet("border: 1px solid red;")
             if 'Optical depth' in err_message:
                 self.tau_box.setStyleSheet("border: 1px solid red;")
@@ -586,23 +784,26 @@ class MainWindow(qt.QMainWindow):
         self.legend = None # Erase stored legend
         # Erase all base parameters and varying parameters
         self.legend_idxs = []
-        self.base_params = [[None, None, 'Molecular', None, None, None, None]]
-
-        # Erase all compositions except the first
-        self.comps = [[qt.QComboBox(), qt.QLineEdit()]]
-        self.comps[0][0].addItems(COMPS)
-        self.comps[0][1].setText('1.0')
-        # Reconnect combo box & line edit to update function
-        self.comps[0][0].currentTextChanged.connect(self.update_graph)
-        self.comps[0][1].returnPressed.connect(self.update_graph)
-        # Recompute material wavelength bounds
-        self.comp_min_wavel, self.comp_max_wavel = utils.get_minmax_wavel(self.comps[0][0].currentText())
+        self.base_params = [[None, None, 'Molecular', None, None, None, None, None, None, None, None, None]]
 
         self.all_borders('black') # Remove all error red borders
 
         # Remove material table and mixture model toggle if present
         if self.mat_table is not None:
+            # Erase all compositions except the first
+            self.comps = [[qt.QComboBox(), qt.QLineEdit()]]
+            self.comps[0][0].addItems(COMPS)
+            self.comps[0][1].setText('1.0')
+            # Reconnect combo box & line edit to update function
+            self.comps[0][0].currentTextChanged.connect(self.update_graph)
+            self.comps[0][1].returnPressed.connect(self.update_graph)
+            # Recompute material wavelength bounds
+            self.comp_min_wavel, self.comp_max_wavel = utils.get_minmax_wavel(self.comps[0][0].currentText())
+
             self.layout.removeWidget(self.mat_table)
+
+            # Call row function to shift all elements below toggle up one
+            self.mknewrow(self.row_widget(self.mixture_model_label) + 1, -1)
             self.layout.removeWidget(self.mixture_model_label)
             self.layout.removeWidget(self.molecular)
             self.layout.removeWidget(self.areal)
@@ -614,12 +815,9 @@ class MainWindow(qt.QMainWindow):
             self.molecular = None
             self.areal = None
 
-            # Call row function to shift all elements below toggle up one
-            self.mknewrow(7, -1)
-
-        # Add singular label and composition dropdown
-        self.layout.addWidget(self.comp_labels[0], 6, 0, 1, 2)
-        self.layout.addWidget(self.comps[0][0], 6, 1, 1, 2)
+            # Add singular label and composition dropdown
+            self.layout.addWidget(self.comp_labels[0], 6, 0, 1, 2)
+            self.layout.addWidget(self.comps[0][0], 6, 1, 1, 2)
 
         self.rst_boxes(autozoom=True) # Re-zoom to fit
 
@@ -679,7 +877,7 @@ class MainWindow(qt.QMainWindow):
         title_str = ''
         # Base of title changes with graph mode
         if self.graphmode == 0 or self.graphmode == 1:
-            title_str += f"{'Surface ' if self.graphmode == 1 else ''}Reflectance vs. Wavelength "
+            title_str += f"{'Surface Albedo' if self.graphmode == 1 else 'Reflectance'} vs. Wavelength "
         else:
             title_str += f"Reflectance vs. Scattering Angle "
 
@@ -687,20 +885,58 @@ class MainWindow(qt.QMainWindow):
         # program. Loop through and determine where the plots are varying, then include those in the title.
         if self.multiple:
             title_str += 'Across Various '
-            for i, idx in enumerate(title_elements):
+            i = 0
+
+            # Check to make sure every plot shown is a known distribution, and if not, indicate that min sizes, max sizes, and powlaws should be shown in title
+            known_params = True
+            for plot in self.base_params:
+                sizedist_params = [float(plot[3]), float(plot[4]), float(plot[5]), float(plot[6]), float(plot[7]), float(plot[8])]
+                model_found = False
+                # Iterate through each distribution and try to find size distribution in parameters
+                for arr in vars.DATA_MODELS.values():
+                    if sizedist_params == arr[0]:
+                        model_found = True
+                        break
+                # If no matching distributions were found, distribution contains custom models
+                if not model_found:
+                    known_params = False
+                    break
+
+            while i < len(title_elements):
+                idx = title_elements[i] # Get the title element index
                 if idx == 0:
                     title_str += 'Sensors'
                 elif idx == 1:
                     title_str += 'Compositions'
                 elif idx == 2:
                     title_str += 'Mixture Models'
-                elif idx == 3:
-                    title_str += 'Data Models'
-                elif idx == 4:
+                elif idx >= 3 and idx <= 8:
+                    # If all of the parameters have known data models, include that
+                    if known_params:
+                        title_str += 'Data Models'
+                        # Skip max sizes, powerlaws, Rs, and Gs if changed
+                        remaining_idxs = np.where(np.asarray(title_elements) > 8)[0]
+                        if len(remaining_idxs) > 0:
+                            i = remaining_idxs[0] - 1 # Will be incremented by 1 in the end, so need to decrement to keep constant
+                        else:
+                            break # The title is done
+                    elif idx == 3:
+                        title_str += 'Minimum Sizes'
+                    elif idx == 4:
+                        title_str += 'Maximum Sizes'
+                    elif idx == 5:
+                        title_str += 'Power Laws'
+                    elif idx == 6:
+                        title_str += 'Rs'
+                    elif idx == 7:
+                        title_str += 'Gs'
+                    elif idx == 8:
+                        title_str += 'x0s'
+                elif idx == 9:
                     title_str += 'Fit Models'
-                elif idx == 5:
+                elif idx == 10:
                     title_str += 'Optical Depths'
-                elif idx == 6:
+                elif idx == 11:
                     if self.graphmode == 0:
                         title_str += 'Scattering Angles'
                     elif self.graphmode == 1:
@@ -712,10 +948,11 @@ class MainWindow(qt.QMainWindow):
                 if i < len(title_elements) - 2:
                     title_str += ', '
                 elif i == len(title_elements) - 2:
-                    if len(title_elements) > 2:
+                    if ',' in title_str:
                         title_str += ', and '
                     else:
                         title_str += ' and '
+                i += 1 # Increment
         # A single graph will always have its wavelength (if ref vs angle) or scattering angle (if ref vs wavelength) displayed
         else:
             title_str += 'at ' + self.param_str
@@ -762,13 +999,48 @@ class MainWindow(qt.QMainWindow):
         else:
             mix = self.base_params[-1][2]
 
+        # If no control over sizedist data, then read distribution type and grab from vars file
+        if self.smin_label is None:
+            datamodel_params = vars.DATA_MODELS[self.dist_model.currentText()][0]
+        # If control over sizedist data, read from appropriate boxes
+        elif self.smin_label.isVisible():
+            datamodel_params = [float(self.smin_box.text()), float(self.smax_box.text()), float(self.powlaw_box.text())]
+            if self.r_label is not None and self.r_label.isVisible():
+                datamodel_params.append(float(self.r_box.text()))
+            else:
+                datamodel_params.append('NaN')
+            
+            if self.G_label is not None and self.G_label.isVisible():
+                datamodel_params.append(float(self.G_box.text()))
+            else:
+                datamodel_params.append('NaN')
+            
+            if self.x0_label is not None and self.x0_label.isVisible():
+                datamodel_params.append(float(self.x0_box.text()))
+            else:
+                datamodel_params.append('NaN')
+        # Default case is all NaNs. This is only really for surface reflectance.
+        else:
+            datamodel_params = ['NaN', 'NaN', 'NaN', 'NaN', 'NaN', 'Nan']
+
+        # Only grab tau if changeable, i.e. if y-axis is reflectance
+        if self.tau_label.isVisible():
+            tau = self.tau_box.text()
+        else:
+            tau = 'NaN'
+
         # Check to see what to put in the legend, i.e. what has changed
         updated_params = [self.instrument.currentText(),
                           compositions,
                           mix,
-                          self.dist_model.currentText(),
-                          self.fit_model.checkedButton().text(),
-                          self.tau_box.text(),
+                          datamodel_params[0],
+                          datamodel_params[1],
+                          datamodel_params[2],
+                          datamodel_params[3],
+                          datamodel_params[4],
+                          datamodel_params[5],
+                          self.fit_model.currentText(),
+                          tau,
                           self.input_box.text()] # Get the new condition values
 
         # Check where the new parameters do not match the base ones
@@ -803,10 +1075,21 @@ class MainWindow(qt.QMainWindow):
             # Loop through each index in legend
             for i in range(len(self.legend.items)):
                 legend_str = ''
+                name = '' # String to hold a named distribution
+                combo = [self.base_params[i][3], self.base_params[i][4], self.base_params[i][5], self.base_params[i][6], self.base_params[i][7], self.base_params[i][8]]
+                        
+                # Set the named distribution based on matching sizedists params, if any
+                for model in vars.DATA_MODELS.keys():
+                    if vars.DATA_MODELS[model][0] == combo:
+                        name = model
+                        break
+
                 # Loop through all changing parameters
-                for idx, item in enumerate(legend_idxs):
-                    # Instruments, mixture models, data models, and fit models can have their strings added directly
-                    if item == 0 or item == 2 or item == 3 or item == 4:
+                idx = 0
+                while idx < len(legend_idxs):
+                    item = legend_idxs[idx] # Get the item
+                    # Instruments, mixture models, and fit models can have their strings added directly
+                    if item == 0 or item == 2 or item == 9:
                         legend_str += self.base_params[i][item]
                     # Compositions are added directly if only one, else each one is added with its corresponding v/v
                     elif item == 1:
@@ -821,16 +1104,42 @@ class MainWindow(qt.QMainWindow):
                                 if len(comps_dict.keys()) > 1 and j < len(comps_dict.keys()) - 1:
                                     legend_str += ', '
                             legend_str += ')'
-                    # Tau and the input will be added numerically
-                    elif item == 5:
+                    # smin, smax, powlaw, tau, and the input will be added numerically
+                    elif item >= 3 and item <= 8:
+                        # Skip the remaining smax and tau if a named distribution
+                        if len(name) > 0:
+                            legend_str += name # If a named distriubtion, add that and skip ahead
+                            # Skip all the sizedist parameters to after index 8
+                            remaining_idxs = np.where(np.asarray(legend_idxs) > 8)[0]
+                            if len(remaining_idxs) > 0:
+                                idx = remaining_idxs[0] - 1 # Will be incremented by 1 in the end, so need to decrement to keep constant
+                            else:
+                                self.legend.items[i][1].setText(legend_str) # Update legend item
+                                break # The legend is done for this element
+                        elif item == 3:
+                            # Otherwise, add the minimum size
+                            legend_str += f'smin={self.base_params[i][item]} μm'
+                        # Only add smax/powlaw/r/G/x0 if unnamed distribution
+                        elif item == 4:
+                            legend_str += f'smax={self.base_params[i][item]} μm'
+                        elif item == 5:
+                            legend_str += f'powlaw={self.base_params[i][item]}'
+                        elif item == 6:
+                            legend_str += f'r={self.base_params[i][item]}'
+                        elif item == 7:
+                            legend_str += f'G={self.base_params[i][item]}'
+                        elif item == 8:
+                            legend_str += f'x0={self.base_params[i][item]}'
+                    elif item == 10:
                         legend_str += f'tau={self.base_params[i][item]:.2s}'
-                    elif item == 6:
+                    elif item == 11:
                         legend_str += f"{self.base_params[i][item]}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}"
 
                     # If before the last thing to add to legend, add a comma and a space
                     if len(legend_idxs) > 1 and idx < len(legend_idxs) - 1:
                         legend_str += ', '
                     self.legend.items[i][1].setText(legend_str) # Update legend item
+                    idx += 1 # Increment counter
 
     def add_material(self):
         """
@@ -855,10 +1164,11 @@ class MainWindow(qt.QMainWindow):
 
             # The material table just replaces the old material dropdown menu. However, for the mixture model,
             # we need to make a new row by shifting everything down one.
-            self.mknewrow(7, 1)
-            self.layout.addWidget(self.mixture_model_label, 7, 0, 1, 1)
-            self.layout.addWidget(self.molecular, 7, 1, 1, 1)
-            self.layout.addWidget(self.areal, 7, 2, 1, 1)
+            mix_row_idx = self.row_widget(self.dist_label)
+            self.mknewrow(mix_row_idx, 1)
+            self.layout.addWidget(self.mixture_model_label, mix_row_idx, 0, 1, 1)
+            self.layout.addWidget(self.molecular, mix_row_idx, 1, 1, 1)
+            self.layout.addWidget(self.areal, mix_row_idx, 2, 1, 1)
 
             # Set up table. Header row is added automatically with setHorizontalHeaderLabels and need not be
             # included in initialization. StableTable ensures table is uninteractable to prevent segmentation
@@ -958,6 +1268,21 @@ class MainWindow(qt.QMainWindow):
 
         return err_string
 
+    def row_widget(self, widget):
+        """
+        A function that locates the row index of a given widget in a layout.
+
+        :param self: MainWindow object
+        :param widget: Widget to locate row position of in self.layout
+
+        :returns: Integer row index of widget
+        """
+        for i in range(self.layout.count()):
+            item = self.layout.itemAt(i) # Get each item in the layout
+            # If item is a widget, get the widget
+            if item and item.widget() and widget == item.widget():
+                return self.layout.getItemPosition(i)[0] # Return row position of item
+
     def mknewrow(self, rowstart, rowshift):
         """
         A function that shifts all widgets at or below rowstart up or down a number of rows indicated by rowshift.
@@ -997,6 +1322,18 @@ class MainWindow(qt.QMainWindow):
         for i in range(len(self.comps)):
             self.comps[i][1].setStyleSheet(f"border: 1px solid {color};")
 
+        # Turn size distribution boxes black if present
+        if self.smin_label is not None:
+            self.smin_box.setStyleSheet(f"border: 1px solid {color};")
+            self.smax_box.setStyleSheet(f"border: 1px solid {color};")
+            self.powlaw_box.setStyleSheet(f"border: 1px solid {color};")
+            if self.r_label is not None:
+                self.r_box.setStyleSheet(f"border: 1px solid {color};")
+            if self.G_label is not None:
+                self.G_box.setStyleSheet(f"border: 1px solid {color};")
+            if self.x0_label is not None:
+                self.x0_box.setStyleSheet(f"border: 1px solid {color};")
+
     def rst_boxes(self, autozoom=False):
         """
         Sets the min and max values for X and Y in their respective input boxes according to the current window
@@ -1012,7 +1349,10 @@ class MainWindow(qt.QMainWindow):
         self.ymax_box.setStyleSheet(f"border: 1px solid black;")
 
         if autozoom:
-            self.graph_widget.autoRange() # Window auto fit for the new dataset
+            if self.base_params[-1][0] == None:
+                self.graph_widget.setRange(xRange=[-10, 10], yRange=[-10, 10]) # Default zoom if graph has just been cleared (base_params will have 1 row full of NoneTypes)
+            else:
+                self.graph_widget.autoRange() # Window auto fit for the new dataset
 
         # Get bounds of window
         bounds = self.graph_widget.viewRange()
@@ -1085,6 +1425,201 @@ class MainWindow(qt.QMainWindow):
                 self.ymin_box.setStyleSheet(f"border: 1px solid red;")
             if 'Max Y' in err_string:
                 self.ymax_box.setStyleSheet(f"border: 1px solid red;")
+
+    def change_distmodel(self):
+        """
+        A method to display boxes for modification of minimum and maximum particle sizes and power law when
+        the 'Custom' data model is selected. If another data model is selected, update graph instead.
+
+        :param self: MainWindow object
+        """
+        # Check to see if the Custom option is selected and the widgets haven't been created yet
+        if self.dist_model.currentText() == 'Custom' and self.smin_label is None and not self.fit_model.currentText() == 'Henyey-Greenstein':
+            self.smin_label = qt.QLabel("Min S:")
+            self.smin_box = qt.QLineEdit()
+            self.smax_label = qt.QLabel("Max S:")
+            self.smax_box = qt.QLineEdit()
+            self.powlaw_label = qt.QLabel("Power Law:")
+            self.powlaw_box = qt.QLineEdit()
+
+            # Connect the boxes to the update function
+            self.smin_box.returnPressed.connect(self.update_graph)
+            self.smax_box.returnPressed.connect(self.update_graph)
+            self.powlaw_box.returnPressed.connect(self.update_graph)
+            self.smin_box.setStyleSheet("border: 1px solid black;")
+            self.smax_box.setStyleSheet("border: 1px solid black;")
+            self.powlaw_box.setStyleSheet("border: 1px solid black;")
+
+            # Make some new rows and add the widgets
+            size_params_row = self.row_widget(self.fit_label)
+            self.mknewrow(size_params_row, 3)
+
+            self.layout.addWidget(self.smin_label, size_params_row, 0, 1, 1)
+            self.layout.addWidget(self.smin_box, size_params_row, 1, 1, 2)
+            self.layout.addWidget(self.smax_label, size_params_row + 1, 0, 1, 1)
+            self.layout.addWidget(self.smax_box, size_params_row + 1, 1, 1, 2)
+            self.layout.addWidget(self.powlaw_label, size_params_row + 2, 0, 1, 1)
+            self.layout.addWidget(self.powlaw_box, size_params_row + 2, 1, 1, 2)
+        else:
+            if self.smin_label is not None:
+                # Shift rows up
+                self.mknewrow(self.row_widget(self.smin_label) + 3, -3)
+                # Remove widgets from display
+                self.layout.removeWidget(self.smin_label)
+                self.layout.removeWidget(self.smin_box)
+                self.layout.removeWidget(self.smax_label)
+                self.layout.removeWidget(self.smax_box)
+                self.layout.removeWidget(self.powlaw_label)
+                self.layout.removeWidget(self.powlaw_box)
+
+                # Set to none so they actually remove
+                self.smin_label = None
+                self.smin_box = None
+                self.smax_label = None
+                self.smax_box = None
+                self.powlaw_label = None
+                self.powlaw_box = None
+        # Update regardless of if boxes were removed or not
+        self.change_fitmodel(update=False)
+
+    def change_fitmodel(self, update=True):
+        """
+        A function to intercept a change in fit model, mainly to update available options for parameters to vary in the size
+        distributions model if a custom distribution is selected.
+
+        :param self: MainWindow object
+        :param update: Boolean, whether to call update_graph on finish. Can be overrided if not a custom size
+                       distribution.
+        """
+        # If Henyey-Greenstein is selected and Custom sizedist is selected, revert to G-ring-like and remove custom boxes
+        if self.fit_model.currentText() == 'Henyey-Greenstein' and self.dist_model.currentText() == 'Custom':
+            self.dist_model.setCurrentText('G-ring-like')
+            self.change_distmodel()
+
+        # First always remove G, r, and x0 boxes
+        if self.r_label is not None:
+            # Delete this row
+            self.mknewrow(self.row_widget(self.r_label) + 1, -1)
+            self.layout.removeWidget(self.r_label)
+            self.r_label = None
+            self.layout.removeWidget(self.r_box)
+            self.r_box = None
+        if self.G_label is not None:
+            # Delete this row
+            self.mknewrow(self.row_widget(self.G_label) + 1, -1)
+            self.layout.removeWidget(self.G_label)
+            self.G_label = None
+            self.layout.removeWidget(self.G_box)
+            self.G_box = None
+        if self.x0_label is not None:
+            # Delete this row
+            self.mknewrow(self.row_widget(self.x0_label) + 1, -1)
+            self.layout.removeWidget(self.x0_label)
+            self.x0_label = None
+            self.layout.removeWidget(self.x0_box)
+            self.x0_box = None
+
+        # Re-add any boxes relevant to the fit model & data model
+        if self.smin_label is not None:
+
+            # Examine the current fit model to see if it allows for modification of G or r
+            fit = self.fit_model.currentText()
+            if fit == "Semi-Empirical Mie":
+                self.r_label = qt.QLabel("R:")
+                self.r_box = qt.QLineEdit()
+                self.G_label = qt.QLabel("G:")
+                self.G_box = qt.QLineEdit()
+                self.x0_label = qt.QLabel("x0:")
+                self.x0_box = qt.QLineEdit()
+                self.r_box.returnPressed.connect(self.update_graph)
+                self.G_box.returnPressed.connect(self.update_graph)
+                self.x0_box.returnPressed.connect(self.update_graph)
+                self.r_box.setStyleSheet("border: 1px solid black;")
+                self.G_box.setStyleSheet("border: 1px solid black;")
+                self.x0_box.setStyleSheet("border: 1px solid black;")
+
+                # Add the row right after the size distribution boxes
+                r_row = self.row_widget(self.powlaw_label) + 1
+                self.mknewrow(r_row, 3)
+                self.layout.addWidget(self.r_label, r_row, 0, 1, 1)
+                self.layout.addWidget(self.r_box, r_row, 1, 1, 2)
+                self.layout.addWidget(self.G_label, r_row + 1, 0, 1, 1)
+                self.layout.addWidget(self.G_box, r_row + 1, 1, 1, 2)
+                self.layout.addWidget(self.x0_label, r_row + 2, 0, 1, 1)
+                self.layout.addWidget(self.x0_box, r_row + 2, 1, 1, 2)
+
+            elif fit == "Mie Diffraction":
+                self.r_label = qt.QLabel("R:")
+                self.r_box = qt.QLineEdit()
+                self.r_box.returnPressed.connect(self.update_graph)
+                self.r_box.setStyleSheet("border: 1px solid black;")
+
+                # Add the row right after the size distribution boxes
+                r_row = self.row_widget(self.powlaw_label) + 1
+                self.mknewrow(r_row, 1)
+                self.layout.addWidget(self.r_label, r_row, 0, 1, 1)
+                self.layout.addWidget(self.r_box, r_row, 1, 1, 2)
+            elif fit == "Mie Transmission":
+                self.G_label = qt.QLabel("G:")
+                self.G_box = qt.QLineEdit()
+                self.G_box.returnPressed.connect(self.update_graph)
+                self.G_box.setStyleSheet("border: 1px solid black;")
+
+                # Add the row right after the size distribution boxes
+                G_row = self.row_widget(self.powlaw_label) + 1
+                self.mknewrow(G_row, 1)
+                self.layout.addWidget(self.G_label, G_row, 0, 1, 1)
+                self.layout.addWidget(self.G_box, G_row, 1, 1, 2)
+
+        # The update optional parameter is there to prevent update graph from getting called when the new sizedist
+        # boxes are added, so the boxes don't instantly turn red. But if those boxes aren't there, we force
+        # an update anyways.
+        if update or not self.dist_model.currentText() == 'Custom':
+            self.update_graph() # Lastly, update the graph
+
+    def change_yaxis(self):
+        """
+        A method to change the Y axis of the graph between reflectance and phase function (phase function is reflectance normalized
+        such that the integral over all solid angles is 1).
+        
+        :param self: MainWindow object
+        """
+        if self.y_axis.currentText() == 'Reflectance':
+            self.graph_widget.setLabel('left', 'Reflectance', units='I/F', color='k') # Units are I/F
+            # Only allow if not reflectance spectrum
+            if not self.graphmode == 0 and self.fit_model.findText("Henyey-Greenstein") < 0:
+                self.fit_model.addItems(["Henyey-Greenstein"]) # Not possible to have multiple, since text has to change to trigger this
+            # Show tau again because reflectance depends on it
+            if not self.tau_label.isVisible():
+                tau_row = self.row_widget(self.fit_label) + 1
+                self.mknewrow(tau_row, 1)
+                self.layout.addWidget(self.tau_label, tau_row, 0, 1, 1)
+                self.layout.addWidget(self.tau_box, tau_row, 1, 1, 2)
+                self.tau_label.setVisible(True)
+                self.tau_box.setVisible(True)
+
+        elif self.y_axis.currentText() == 'Phase Function':
+            self.graph_widget.setLabel('left', 'Phase Function', units='dim', color='k') # Units are dimensionless
+            # Remove Henyey-Greenstein from the y-axis dropdown list since it is not supported in phase function plots
+            # If it's in there, it will switch to the first option in the list (by default it switches to the option above HG)
+            # If it's not, the remove will fail silently
+            if self.fit_model.currentText() == "Henyey-Greenstein":
+                self.fit_model.setCurrentText("Semi-Empirical Mie")
+            self.fit_model.removeItem(self.fit_model.findText("Henyey-Greenstein"))
+
+            # Hide tau, phase function does not depend on it
+            if self.tau_label.isVisible():
+                tau_row = self.row_widget(self.tau_label)
+                self.mknewrow(tau_row + 1, -1)
+                self.layout.removeWidget(self.tau_label)
+                self.layout.removeWidget(self.tau_box)
+                self.tau_label.setVisible(False)
+                self.tau_box.setVisible(False)
+
+        elif self.y_axis.currentText() == 'Albedo':
+            self.graph_widget.setLabel('left', 'Albedo', units='dim', color='k') # Units are dimensionless
+
+        self.clear_graph() # Clear the graph to avoid any issues with previous data
 
 class StableTable(qt.QTableWidget):
     """
