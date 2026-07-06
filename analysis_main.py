@@ -60,6 +60,7 @@ if __name__ == "__main__":
     # Every PyQt app needs exactly one QApplication instance
     # sys.argv allows you to pass command line arguments to your app
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
 
     # Instantiate window and display it
     window = gui.MainWindow()

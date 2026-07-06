@@ -8,8 +8,8 @@ import utils
 import os
 import numpy as np
 
-COLOR_ARR = ['red', 'magenta', 'orange', 'green', 'blue', 'violet'] # Array of graph colors to cycle through
-COMPS = utils.get_available_materials() # Call function to parse data directory to get all available materials
+COLOR_ARR = ['red', 'magenta', 'orange', 'green', 'blue', 'violet'] # Update_graph creates a temporary graph that cycles through these colors as they are added to the window
+COMPS = utils.get_available_materials() # Call function to parse data directory to get all available materials to display
 
 class MainWindow(qt.QMainWindow):
     """
@@ -38,7 +38,6 @@ class MainWindow(qt.QMainWindow):
         self.central_widget.setLayout(self.layout)
 
         # --- WIDGETS ---
-
         # Push button to toggle between reflectance vs wavelength graphs and reflectance vs scattering angle graphs
         # Indicates what type of graph is being shown. 0 is IFs vs wavelengths, 1 is surface albedos vs wavelengths, 2 is IFs vs scattering angles
         self.graphmode = 0
@@ -47,15 +46,16 @@ class MainWindow(qt.QMainWindow):
         # Dropdown list for instruments on Europa Clipper
         self.instrument_label = qt.QLabel("Instrument:")
         self.instrument = qt.QComboBox()
-        self.instrument.addItems(vars.INSTRUMENTS.keys()) # Add from variables file
+        self.instrument.addItems(vars.INSTRUMENTS.keys()) # Add all available instruments from variables file
 
         # Dropdown list for available material compositions
+        # These labels will form the header row for the materials table if multiple are added
         self.comp_labels = [qt.QLabel("Composition:"), qt.QLabel("Volume Fraction:")]
         self.mat_table = None # A table will be added if we add multiple materials to the composition
         # Each material in a composition will have a dropdown list to specify the material,
-        # plus an entry field for the corresponding volume fraction
+        # plus an entry field for the corresponding volume fraction. This array will be added to for each material
         self.comps = [[qt.QComboBox(), qt.QLineEdit()]]
-        self.comps[0][0].addItems(COMPS)
+        self.comps[0][0].addItems(COMPS) # Each box allows for selection of a new material
         self.comps[0][1].setText('1.0') # The default volume fraction (not shown) is 1.0, since there is only one material
         # Determining the minimum and maximum bounds for wavelength based on available material data
         # Instrument wavelength ranges will be far more limiting, but good to include this nonetheless
@@ -66,13 +66,14 @@ class MainWindow(qt.QMainWindow):
         self.dist_model = qt.QComboBox()
         self.dist_model.addItems(vars.DATA_MODELS.keys())
         self.dist_model.addItems(['Custom'])
-        # These objects will be shown when the user clicks the 'Custom' option for data models
+        # These objects will be shown when the user clicks the 'Custom' option for data models. Essential for Mie computations.
         self.smin_label = None
         self.smin_box = None
         self.smax_label = None
         self.smax_box = None
         self.powlaw_label = None
         self.powlaw_box = None
+        # These objects may or may not be shown depending on the fit model, but they are necessary for the semi-empirical theory and some of its variants
         self.G_label = None
         self.G_box = None
         self.r_label = None
@@ -80,25 +81,27 @@ class MainWindow(qt.QMainWindow):
         self.x0_label = None
         self.x0_box = None
 
-        # Dropdown list to select which scattering theory to use in reflectance vs. angle and reflectance vs. wavelength graphs
+        # Dropdown list to select which fit model to use in graphs
         self.fit_label = qt.QLabel("Fit Model:")
         self.fit_model = qt.QComboBox()
-        # By default, pure Mie is used. The others are to get different components of the Mie function. Henyey-Greenstein is not added yet as it is not supported in ref. vs. wavel. plots
+        # By default, semi-empirical Mie (as implemented by Pollack & Cuzzi, 1980) is used. The others are to get different components of the Mie function.
+        # Since the default is reflectance vs. wavelength, Henyey-Greenstein won't be added yet
         self.fit_model.addItems(["Semi-Empirical Mie", "Pure Mie", "Mie Diffraction", "Mie External Reflection", "Mie Transmission"])
 
-        # Entry box for manual optical depth input
+        # Entry box for manual optical depth input. Will only be shown if the y-axis of the graph is 'reflectance'
         self.tau_label = qt.QLabel("Optical Depth:")
         self.tau_box = qt.QLineEdit()
-        self.tau_box.setPlaceholderText("Input optical depth") # Switching graph modes will clear this box, so this needs to display
+        self.tau_box.setPlaceholderText("Input optical depth") # In case the user clears the box
         self.tau_box.setText("1e-6") # Standard order of magnitude for optical depth
 
-        # Entry box for varying parameter, either scattering angle (for ref vs. wavel) or wavelength (for ref vs. theta)
+        # Entry box for varying parameter, either scattering angle (for ref vs. wavel), effective grain size (surface reflectance vs. wavelength), or wavelength (for ref vs. theta)
         self.param_str = ''
         self.input_label = qt.QLabel("Scattering Angle:")
         self.input_box = qt.QLineEdit()
-        self.input_box.setPlaceholderText("Input scattering angle in degrees")
+        self.input_box.setPlaceholderText("Input scattering angle in degrees") # Switching graphs clears this box, so this needs to display
         self.input_box.setText("90")
 
+        # Y axis dropdown box, can switch between plotting reflectance and phase function (as used in Pollack & Cuzzi, 1980)
         self.y_axis_label = qt.QLabel("Y Axis:")
         self.y_axis = qt.QComboBox()
         self.y_axis.addItems(["Reflectance", "Phase Function"])
@@ -142,10 +145,12 @@ class MainWindow(qt.QMainWindow):
         grid_pen = pg.mkPen(color='k', width=1, style=pg.QtCore.Qt.PenStyle.SolidLine) # Pen to use on axes
         self.graph_widget = pg.PlotWidget()
         self.graph_widget.setBackground('w') # Set background to white
-        self.graph_widget.showGrid(x=True, y=True)
+        self.graph_widget.showGrid(x=True, y=True) # Grid is helpful to identify points on displayed graphs
+        # Setup axes for default reflectance vs. wavelength plot
         self.graph_widget.setLabel('left', self.y_axis.currentText(), units='I/F', color='k')
         self.graph_widget.setLabel('bottom', 'Wavelength', units='μm', color='k')
-        self.graph_widget.getAxis('bottom').setPen(grid_pen) # Pen ensures axes and numbers are black and thick
+        # Pen ensures axes and numbers are black and thick
+        self.graph_widget.getAxis('bottom').setPen(grid_pen)
         self.graph_widget.getAxis('left').setPen(grid_pen)
         self.graph_widget.getAxis('bottom').setTextPen(grid_pen)
         self.graph_widget.getAxis('left').setTextPen(grid_pen)
@@ -178,10 +183,10 @@ class MainWindow(qt.QMainWindow):
         self.ymax_box.setMaximumWidth(50)
 
         # --- WIDGET FUNCTIONALITY ---
-        # Pressing the graph mode button toggles between ref vs wavel and ref vs angle
+        # Pressing the graph mode button toggles between graph modes, clearing the window in the process
         self.graph_mode_button.clicked.connect(self.mode_toggle)
 
-        # Changing the y-axis will reset the window and replot the data
+        # Changing the y-axis will clear the window and change the displayed vertical axis
         self.y_axis.currentTextChanged.connect(self.change_yaxis)
 
         # Pressing scale radio buttons updates scale
@@ -190,10 +195,11 @@ class MainWindow(qt.QMainWindow):
 
         # Changing anything about the dataset (instrument, comp, model, tau, etc) replots the data
         self.instrument.currentTextChanged.connect(self.update_graph)
-        self.dist_model.currentTextChanged.connect(self.change_distmodel)
-        self.fit_model.currentTextChanged.connect(self.change_fitmodel)
         self.tau_box.returnPressed.connect(self.update_graph)
         self.input_box.returnPressed.connect(self.update_graph)
+        # The size distribution model and the fit model need special functions to handle custom distribution inputs
+        self.dist_model.currentTextChanged.connect(self.change_distmodel)
+        self.fit_model.currentTextChanged.connect(self.change_fitmodel)
 
         # Changing anything about the composition replots the data
         self.comps[0][0].currentTextChanged.connect(self.update_graph)
@@ -217,8 +223,9 @@ class MainWindow(qt.QMainWindow):
         self.ymax_box.returnPressed.connect(self.update_bounds)
 
         # --- GRAPH DRAG & RELEASE LOGIC ---
-        
-        # Create a flag to track if the user actually dragged the graph
+        # Create a flag to track if the user dragged the graph, which would cause an update of the bounds
+        # Dragging the graph can connect to an event itself, but ensuring the graph is dragged and released
+        # requires intercepting a mouse release event.
         self.graph_was_dragged = False
         # Listen for manual range changes (fires continuously during a drag)
         def flag_dragged():
@@ -227,6 +234,7 @@ class MainWindow(qt.QMainWindow):
 
         # Store the original mouse release/scroll wheel to avoid breaking PyQt6's internal math
         self._original_mouse_release = self.graph_widget.mouseReleaseEvent
+        # The scroll wheel allows the graph to be zoomed in/out, also requiring a bounds update
         self._original_wheel = self.graph_widget.wheelEvent
 
         def click_release(event):
@@ -254,12 +262,13 @@ class MainWindow(qt.QMainWindow):
             self._original_wheel(event) # Keep the original scrolling
             self.rst_boxes() # Reset bounds boxes
             
-        # Override default mouse release and scroll events
+        # Override default mouse release and scroll events to allow dynamic updating of bounds boxes
         self.graph_widget.mouseReleaseEvent = click_release
         self.graph_widget.wheelEvent = scroll_wheel
 
         # --- LAYOUT ---
         # Items are arranged in (row, column, rowspan, columnspan)
+        # Buttons are at the top, plus instruments since that box never causes weird formatting
         self.layout.addWidget(self.graph_mode_button, 0, 0, 1, 3)
         self.layout.addWidget(self.add_material_button, 1, 0, 1, 3)
         self.layout.addWidget(self.add_graph_button, 2, 0, 1, 3)
@@ -267,6 +276,8 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.save_plot_button, 4, 0, 1, 3)
         self.layout.addWidget(self.instrument_label, 5, 0, 1, 1)
         self.layout.addWidget(self.instrument, 5, 1, 1, 2)
+
+        # All these widgets are overlaid on top of each other (home in top left, xmin/max & ymin/max in top right)
         self.layout.addWidget(self.graph_widget, 0, 3, 16, 16)
         self.layout.addWidget(self.home_button, 1, 4, 1, 1)
         self.layout.addWidget(self.xmin_label, 1, 15, 1, 1)
@@ -279,9 +290,11 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.ymax_box, 2, 18, 1, 1)
 
         # These two will get replaced by a table if multi-material mixture is enabled
+        # Only one new row will be inserted for the mix model if this is the case
         self.layout.addWidget(self.comp_labels[0], 6, 0, 1, 1)
         self.layout.addWidget(self.comps[0][0], 6, 1, 1, 2)
 
+        # The rest of the widgets may update in visibility depending on the combination of parameters selected.
         self.layout.addWidget(self.dist_label,  7, 0, 1, 1)
         self.layout.addWidget(self.dist_model, 7, 1, 1, 2)
         self.layout.addWidget(self.fit_label, 8, 0, 1, 1)
@@ -301,48 +314,53 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.load_label, 14, 0, 2, 2)
         
         # Base parameters track conditions of each plot on the graph, used for tracking changes
-        self.base_params = [[self.instrument.currentText(),
-                    {self.comps[0][0].currentText(), self.comps[0][1].text()},
-                    'Molecular', # Mixture model is not displayed at first, so must set to default
-                    vars.DATA_MODELS['G-ring-like'][0][0],
-                    vars.DATA_MODELS['G-ring-like'][0][1],
-                    vars.DATA_MODELS['G-ring-like'][0][2], # Get initial data model parameters
-                    vars.DATA_MODELS['G-ring-like'][0][3],
-                    vars.DATA_MODELS['G-ring-like'][0][4],
-                    vars.DATA_MODELS['G-ring-like'][0][5],
-                    self.fit_model.currentText(),
-                    self.tau_box.text(),
-                    self.input_box.text()]]
-        self.legend_idxs = [] # Array to hold base parameter indexes to include in the legends, i.e. those that have changed
+        # If ANY of these values are not modifiable by the user in the GUI (i.e. not displayed), they
+        # will be set to 'NaN'
+        self.base_params = [[self.instrument.currentText(), # Instrument on Clipper
+                    {self.comps[0][0].currentText(), self.comps[0][1].text()}, # Materials dictionary, name: volume fraction
+                    'Molecular', # Mixture model is not displayed at first, so must set to default. If not displayed, this is Molecular by default, not NaN
+                    vars.DATA_MODELS['G-ring-like'][0][0], # S_min parameter, varies with size distribution
+                    vars.DATA_MODELS['G-ring-like'][0][1], # S_max parameter, varies with size distribution
+                    vars.DATA_MODELS['G-ring-like'][0][2], # Power law parameter, varies with size distribution
+                    vars.DATA_MODELS['G-ring-like'][0][3], # r parameter for semi-empirical Mie, varies with size distribution
+                    vars.DATA_MODELS['G-ring-like'][0][4], # G parameter for semi-empirical Mie, varies with size distribution
+                    vars.DATA_MODELS['G-ring-like'][0][5], # x0 parameter for semi-empirical Mie, varies with size distribution
+                    self.fit_model.currentText(), # Which scattering theory to use
+                    self.tau_box.text(), # Optical depth
+                    self.input_box.text()]] # Varying parameter (wavelength, grain size, angle)
+        self.legend_idxs = [] # Array to hold base parameter indexes to include in the legends, i.e. those that change at some point in base_param's history
 
-        self.update_graph() # There are default settings in the input boxes, so output the first graph
-        self.update_title(self.legend_idxs)
-        self.all_borders('black') # Set all input box borders to black
+        # There are default settings in the input boxes, so output the first graph
+        self.update_graph()
 
     def mode_toggle(self):
         """
         A function that defines the behavior of the graph mode button when clicked. Toggles between
-        'Reflectance vs. Wavelength' and 'Reflectance vs. Scattering Angle.' Clears graph in the process, 
-        resets input fields, and updates title
+        'Reflectance vs. Wavelength', 'Surface Reflectance vs. Wavelength', and 'Reflectance vs. Scattering 
+        Angle.' Clears graph in the process, resets input fields, and updates title
 
         :param self: MainWindow object
         """
         self.clear_graph() # Clear graph first
 
-        # First ensure all missing widgets are displayed upon a mode change
+        # First ensure all missing widgets are displayed upon a mode change. This is only relevant from mode 1 to mode 2
         if self.graphmode == 1:
-            self.mknewrow(self.row_widget(self.input_label), 2) # Tau may/may not be added later
+            # Make a couple new rows to add the missing widgets we know will always be present in this graph mode
+            self.mknewrow(self.row_widget(self.input_label), 2)
             self.layout.addWidget(self.dist_label, 7, 0, 1, 1)
             self.layout.addWidget(self.dist_model, 7, 1, 1, 2)
             self.layout.addWidget(self.fit_label, 8, 0, 1, 1)
             self.layout.addWidget(self.fit_model, 8, 1, 1, 2)
-            self.dist_label.setVisible(True)
+            self.dist_label.setVisible(True) # Make sure they are displayed so track_changes can update them properly
             self.dist_model.setVisible(True)
             self.fit_label.setVisible(True)
             self.fit_model.setVisible(True)
-            self.y_axis.removeItem(self.y_axis.findText("Albedo"))
-            self.y_axis.addItems(["Reflectance", "Phase Function"]) # Add back the options for phase function & reflectance for the y-axis
+            self.y_axis.removeItem(self.y_axis.findText("Albedo")) # Albedo is special to graph mode 1
+            # Add back the options for phase function & reflectance for the y-axis
+            # This will switch back to reflectance by default
+            self.y_axis.addItems(["Reflectance", "Phase Function"])
 
+            # If we set the distribution to custom before, we re-add all the size distribution boxes
             if self.smin_label is not None:
                 self.mknewrow(8, 3)
                 self.layout.addWidget(self.smin_label, 8, 0, 1, 1)
@@ -358,7 +376,7 @@ class MainWindow(qt.QMainWindow):
                 self.powlaw_label.setVisible(True)
                 self.powlaw_box.setVisible(True)
 
-                # If the fit model allows it, add G and r boxes
+                # If the fit model allows it, add G, r, and x0 boxes
                 if self.r_label is not None:
                     self.mknewrow(11, 1)
                     self.layout.addWidget(self.r_label, 11, 0, 1, 1)
@@ -383,7 +401,7 @@ class MainWindow(qt.QMainWindow):
                     self.layout.addWidget(self.x0_label, 13, 0, 1, 1)
                     self.layout.addWidget(self.x0_box, 13, 1, 1, 2)
 
-        self.graphmode = int((self.graphmode + 1) % 3) # Switch the graph mode variable
+        self.graphmode = int((self.graphmode + 1) % 3) # Cycle graph mode between 0 and 2
         if self.graphmode == 0:
             self.graph_mode_button.setText("Reflectance vs. Wavelength")
             self.input_label.setText("Scattering Angle:")
@@ -396,14 +414,18 @@ class MainWindow(qt.QMainWindow):
             self.graph_mode_button.setText("Surface Reflectance vs. Wavelength")
             self.input_label.setText("Effective Grain Size:")
             self.input_box.setPlaceholderText("Input effective grain size in microns")
-            self.graph_widget.setLabel('bottom', 'Wavelength', units='μm')
+            self.graph_widget.setLabel('bottom', 'Wavelength', units='μm') # This mode also has x-axis in wavelength
 
             # If size distribution boxes are shown, get rid of them and switch sizedists to G-ring-like
             if self.smin_label is not None:
                 # Shift rows up
                 self.mknewrow(self.row_widget(self.smin_label) + 3, -3)
 
-                # Remove widgets from display
+                # Remove widgets from display. Note how we set visibility to false instead of setting smin_label
+                # to None. That is done elsewhere to trigger a RESET of the size distribution boxes. As it stands,
+                # when the graph cycles through its modes, boxes that disappear will reappear with the values they
+                # had before in them. It is important to note the code does NOT read these boxes while they are
+                # invisible.
                 self.layout.removeWidget(self.smin_label)
                 self.smin_label.setVisible(False)
                 self.layout.removeWidget(self.smin_box)
@@ -417,16 +439,15 @@ class MainWindow(qt.QMainWindow):
                 self.layout.removeWidget(self.powlaw_box)
                 self.powlaw_box.setVisible(False)
                 
-                # If the fit model allows it, add G and r boxes
+                # If the fit model created them, make G, r, and x0 boxes not visible
                 if self.r_label is not None:
-                    # Delete this row
+                    # Deleting rows invovles going to the next row and shifting it up one
                     self.mknewrow(self.row_widget(self.r_label) + 1, -1)
                     self.layout.removeWidget(self.r_label)
                     self.r_label.setVisible(False)
                     self.layout.removeWidget(self.r_box)
                     self.r_box.setVisible(False)
                 if self.G_label is not None:
-                    # Delete this row
                     self.mknewrow(self.row_widget(self.G_label) + 1, -1)
                     self.layout.removeWidget(self.G_label)
                     self.G_label.setVisible(False)
@@ -451,6 +472,7 @@ class MainWindow(qt.QMainWindow):
             self.layout.removeWidget(self.fit_model)
             self.fit_model.setVisible(False)
 
+            # Also hide tau if visible
             if self.tau_label.isVisible():
                 self.mknewrow(self.row_widget(self.input_box), -1)
                 self.layout.removeWidget(self.tau_label)
@@ -459,7 +481,8 @@ class MainWindow(qt.QMainWindow):
                 self.tau_box.setVisible(False)
 
             # Remove phase function & reflectance from the y-axis dropdown list since it is not supported in surface spectra plots
-            # If it's not in there, this will fail silently and not cause any issues
+            # Albedo is currently the only supported y-axis value for those plots
+            # If they're not in there, this will fail silently and not cause any issues
             self.y_axis.removeItem(self.y_axis.findText("Reflectance"))
             self.y_axis.removeItem(self.y_axis.findText("Phase Function"))
             self.y_axis.addItem("Albedo")
@@ -469,29 +492,29 @@ class MainWindow(qt.QMainWindow):
             self.input_label.setText("Wavelength:")
             self.input_box.setPlaceholderText("Input wavelength in microns")
             self.graph_widget.setLabel('bottom', 'Scattering Angle', units='°') # Change bottom axis label
-            if self.fit_model.findText("Henyey-Greenstein") < 0:
-                self.fit_model.addItem("Henyey-Greenstein") # Reflectance vs. scattering angle has Henyey-Greenstein functionality
 
         self.change_yaxis() # Call just to make sure all shown parameters correspond to the y-axis of the plot
 
     def update_graph(self):
         """
         A function called if any of the data parameters are changed. Calls the plotter function from the main
-        program and outputs the new temporary function on the graph, replacing the old function (assuming that function
-        wasn't made permanent via 'Add new plot'). If parameters are invalid, updates status message to error message
-        and turns the appropriate box red. If multiple graphs involved, updates legend accordingly.
+        program and outputs the new temporary data on the graph, replacing the old data (assuming that data
+        wasn't made permanent via 'Add new plot'). If parameters are invalid, updates status message to the
+        appropriate error message and turns the appropriate box red. If multiple graphs involved, updates legend 
+        accordingly.
 
         :param self: MainWindow object
         """
         self.all_borders('black') # Reset any previous errors
         self.load_label.setText("Updating...") # Status label changes to indicate loading
         
-        qt.QApplication.processEvents() # Force a screen update to render the status label and the box borders as well as the potentially changed distmodel
+        qt.QApplication.processEvents() # Force a screen update to render the status label and the box borders during computation
 
         # Error checking for materials table if available
         err_message = '' # Will dynamically update to support multiple errors at once
         if len(self.comps) > 1:
             # Update materials checks to make sure there aren't errors specifically in the materials table
+            # update_materials returns an error message if any, tack that on whether empty or not
             err_message += self.update_materials()
 
         # Error checking for smin, smax, powlaw boxes if available
@@ -504,6 +527,7 @@ class MainWindow(qt.QMainWindow):
             try:
                 smin = float(smin_txt)
                 if smin <= 0:
+                    # A space must be included after each error message because they can stack
                     err_message += "Min S must be greater than zero. "
             except ValueError:
                 err_message += "Min S must be a float. "
@@ -556,7 +580,7 @@ class MainWindow(qt.QMainWindow):
                 self.smax_box.setStyleSheet(f"border: 1px solid red;")
             if 'Power law' in err_message:
                 self.powlaw_box.setStyleSheet(f"border: 1px solid red;")    
-            if 'R ' in err_message: # Should include a space, just in case
+            if 'R ' in err_message: # Should include a space, just in case since R is a very generic thing to find in a string
                 self.r_box.setStyleSheet(f"border: 1px solid red;")
             if 'G ' in err_message:
                 self.G_box.setStyleSheet(f"border: 1px solid red;")
@@ -564,19 +588,19 @@ class MainWindow(qt.QMainWindow):
                 self.x0_box.setStyleSheet(f"border: 1px solid red;")
             
         # Read each parameter from the appropriate widget
-        compositions = {}
         sensor = self.instrument.currentText()
 
         # Error message is displayed at the end; however, we need to check for updated comps here to check for
         # other errors later
-        if len(err_message) == 0:
+        compositions = {} # This will be used to update the graph/legend
+        if "Volume fractions" not in err_message: # Only compute if no comp errors were detected
             for i, item in enumerate(self.comps):
                 if not float(item[1].text()) == 0: # Compositions with v/v equal to zero don't count in legend updates
                     compositions[item[0].currentText()] = item[1].text()
 
             # Composition changes require getting which wavelengths are supported for that material
             # First set up extreme cases
-            min_limiting_comp = ['', 0]
+            min_limiting_comp = ['', 0] # First index will be material, second will be limiting wavelength bound
             max_limiting_comp = ['', 99999999999]
             # A loop to check which material with a nonzero v/v has the greatest minimum wavelength, and which has the least maximum
             # Getting a baseline wavelength range bound
@@ -595,15 +619,13 @@ class MainWindow(qt.QMainWindow):
         tau_str = self.tau_box.text()
         self.param_str = self.input_box.text() # param_str is a self variable because it needs to be referenced elsewhere
 
-        # Error handling - checking to make sure that all parameters are in bounds
         # Error checking for parameter if it's a wavelength
         if self.graphmode == 2:
             try:
                 param = float(self.param_str)
                 # Check to make sure it's in range of the sensor AND the index of refraction data for that material
-                # material is first because it has to make sure no errors are before it, the only errors before it
-                # would be composition errors which would prevent us from getting accurate wavelength bounds anyway
-                if len(err_message) == 0:
+                # material has to make sure no composition errors are before it
+                if "Volume fractions" in err_message:
                     if param < self.comp_min_wavel[1]:
                         err_message += f'Wavelength is too low for {self.comp_min_wavel[0]}. '
                     elif param > self.comp_max_wavel[1]:
@@ -620,7 +642,7 @@ class MainWindow(qt.QMainWindow):
                     # Set the user input box to display the parameter. This is mainly so the title or legend doesn't display MIN, which is weird
                     self.input_box.setText(self.param_str)
                     # Check material bounds again (sensor bounds automatically pass)
-                    if len(err_message) == 0:
+                    if "Volume fractions" in err_message:
                         if param < self.comp_min_wavel[1]:
                             err_message += f'Wavelength is too low for {self.comp_min_wavel[0]}. '
                         elif param > self.comp_max_wavel[1]:
@@ -629,13 +651,14 @@ class MainWindow(qt.QMainWindow):
                     param = vars.INSTRUMENTS[sensor][1]
                     self.param_str = str(param)
                     self.input_box.setText(self.param_str)
-                    if len(err_message) == 0:
+                    if "Volume fractions" in err_message:
                         if param < self.comp_min_wavel[1]:
                             err_message += f'Wavelength is too low for {self.comp_min_wavel[0]}. '
                         elif param > self.comp_max_wavel[1]:
                             err_message += f'Wavelength is too high for {self.comp_max_wavel[0]}. '
                 else:
                     err_message += f'Wavelength must be a float, MIN, or MAX. '
+
         # Error checking for parameter if it's a scattering angle
         elif self.graphmode == 0:
             try:
@@ -644,6 +667,7 @@ class MainWindow(qt.QMainWindow):
                     err_message += f'Scattering angle must be between 0 and 180 degrees. '
             except ValueError:
                 err_message += f'Scattering angle must be an integer. '
+
         # Error checking for parameter if it's an effective grain size
         elif self.graphmode == 1:
             try:
@@ -661,6 +685,7 @@ class MainWindow(qt.QMainWindow):
         except ValueError:
             err_message += 'Optical depth must be a float. '
 
+        # We only update if there are no input errors
         if len(err_message) == 0:
             # Get the current text box values (updated_params), plus any indexes where they're different from the original data
             updated_params, temp_legend_idxs = self.track_changes()
@@ -672,14 +697,14 @@ class MainWindow(qt.QMainWindow):
                     self.ifs.setData([], [])
                     self.legend.removeItem(self.ifs)
                     self.all_borders('red')
-            # This function runs whenever a field is clicked. But if it hasn't changed, don't bother with calculations
+            # update_graph runs whenever a field is clicked. But if it hasn't changed, don't bother with calculations
             elif len(temp_legend_idxs) == 0:
                 self.load_label.setText("Plot is identical to previous graph")
                 # Generic errors are generally speaking going to turn all the boxes red
                 self.all_borders('red')
             else:
                 # If the text box values are in fact unique and have no errors, update the last element in the base parameter array
-                # The last element represents the current plot
+                # The last element represents the current plot (every time a plot gets added later, a new element gets tacked on)
                 self.base_params[-1] = updated_params
 
                 # Reuse the same pen color for all updates to the current plot
@@ -692,15 +717,15 @@ class MainWindow(qt.QMainWindow):
                 if self.ifs not in self.graph_widget.plotItem.items:
                     self.ifs = self.graph_widget.plot(self.x_data, self.y_data, pen=self.plt_pen, name=(f"{self.param_str}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}" if self.multiple else None))
                 else:
-                    self.ifs.setData(self.x_data, self.y_data)
+                    self.ifs.setData(self.x_data, self.y_data) # self.ifs variable allows for updating of the temporary graph
 
                 # Update the legend if multiple graphs
                 if self.multiple:
-                    self.legend.removeItem(self.ifs) # Need to do remove + add because there's no setter function
+                    self.legend.removeItem(self.ifs) # Need to do remove and add because there's no setter function
                     self.legend.addItem(self.ifs, '') # Add a blank placeholder for self.ifs so legend setter function has a full array to loop through
-                    self.generate_legend(temp_legend_idxs)
+                    self.generate_legend(temp_legend_idxs) # Update the full legend. The last element is our new temporary plot
 
-                self.update_title(temp_legend_idxs)
+                self.update_title(temp_legend_idxs) # Update the title showing variance across all current plots
                 self.rst_boxes(autozoom=True) # Reset zoom
                 self.load_label.setText("Up to date")
         else:
@@ -710,11 +735,13 @@ class MainWindow(qt.QMainWindow):
                 self.input_box.setStyleSheet("border: 1px solid red;")
             if 'Optical depth' in err_message:
                 self.tau_box.setStyleSheet("border: 1px solid red;")
+            # Composition and size distribution errors get handled earlier
 
     def plot_graph(self):
         """
-        A function that saves the current x_data, y_data to the graph as a permanent plot and resets the dataset
-        for a new plot, setting the plot up to hold multiple datasets. Sets up the legend and updates the title.
+        A function that saves the current x_data, y_data of the temporary plot to the graph as a permanent plot 
+        and resets the program for a new plot, setting the plot up to hold multiple datasets. Sets up the legend 
+        and updates the title.
 
         :param self: MainWindow object
         """
@@ -733,12 +760,12 @@ class MainWindow(qt.QMainWindow):
             self.load_label.setText("Plot is identical to existing data")
             self.all_borders('red')
         else:
-            self.all_borders('black')
+            self.all_borders('black') # Remove all outstanding errors
 
             # Create a legend if none already. Needs to be here since legends are for multiple graphs only
             if self.legend == None:
                 self.legend = self.graph_widget.addLegend()
-                self.legend.setLabelTextColor('k') # Default is gray, but hard to see
+                self.legend.setLabelTextColor('k') # Default is gray and hard to see; we set it to black
 
             self.legend.removeItem(self.ifs) # If temporary plot has a legend item, remove it to establish a permanent one
             # Turn the temporary plot into a permanent one not associated with a temporary self.ifs variable.
@@ -756,7 +783,7 @@ class MainWindow(qt.QMainWindow):
             
             self.multiple = True # Set the global variable to indicate multiple graphs stored on plot
             self.update_title(self.legend_idxs)
-            self.graph_widget.autoRange() # Auto fit for the shown datasets
+            self.rst_boxes(autozoom=True) # Reset zoom
             # Cycle through to the next color for the next dataset
             self.last_color_idx = (self.last_color_idx + 1) % len(COLOR_ARR)
             # self.ifs becomes ready for the next dataset
@@ -767,14 +794,15 @@ class MainWindow(qt.QMainWindow):
 
     def clear_graph(self):
         """
-        Clears all graphs from the current plot, as well as the parameter in the parameter box.
+        Clears all graphs from the current plot, as well as the parameter in the parameter box. Removes any
+        material table and replaces it with a single material dropdown box.
 
         :param self: MainWindow object
         """
         self.multiple = False # No graphs means no multiple
         self.param_str = '' # Reset input box
         self.input_box.setText(self.param_str)
-        self.update_title([]) # Update title to default
+        self.update_title([]) # Update title to default. [] ensures that no parameters are listed as varying
         # Reset temporary plot
         self.x_data = []
         self.y_data = []
@@ -804,11 +832,12 @@ class MainWindow(qt.QMainWindow):
 
             # Call row function to shift all elements below toggle up one
             self.mknewrow(self.row_widget(self.mixture_model_label) + 1, -1)
+            # Remove the elements of the toggle
             self.layout.removeWidget(self.mixture_model_label)
             self.layout.removeWidget(self.molecular)
             self.layout.removeWidget(self.areal)
 
-            # For some reason, if we don't set these to None, "ghost versions" will appear in the window even after reomved
+            # For some reason, if we don't set these to None, "ghost versions" will appear in the window even after removed
             # So we must clear them here.
             self.mat_table = None
             self.mixture_model_label = None
@@ -820,7 +849,6 @@ class MainWindow(qt.QMainWindow):
             self.layout.addWidget(self.comps[0][0], 6, 1, 1, 2)
 
         self.rst_boxes(autozoom=True) # Re-zoom to fit
-
         self.load_label.setText("Up to date")
 
     def update_scale(self):
@@ -842,7 +870,7 @@ class MainWindow(qt.QMainWindow):
         :param self: MainWindow object
         (:param dialog_title:, :param starting_directory:, :param file_extension: Handled automatically)
         """
-        # Open the file save dialogue box
+        # Open the file save dialogue box. Here user can specify the path they want to save the graph to
         file_path, _ = qt.QFileDialog.getSaveFileName(
             self, 
             "Save Plot As", 
@@ -860,11 +888,11 @@ class MainWindow(qt.QMainWindow):
             self.exporter = pg.exporters.ImageExporter(self.graph_widget.plotItem)
             self.exporter.export(file_path)
 
-            # Confirm whether file saved successfully
+            # Confirm whether file saved successfully & set load label to display that
             if os.path.exists(file_path):
-                print(f"File saved to {file_path}")
+                self.load_label.setText(f"File saved to {file_path}")
             else:
-                print(f"File failed to save.")
+                self.load_label.setText(f"File failed to save.")
 
     def update_title(self, title_elements):
         """
@@ -875,11 +903,9 @@ class MainWindow(qt.QMainWindow):
                                to include in the title. Shape len(self.legend_idxs)
         """
         title_str = ''
-        # Base of title changes with graph mode
-        if self.graphmode == 0 or self.graphmode == 1:
-            title_str += f"{'Surface Albedo' if self.graphmode == 1 else 'Reflectance'} vs. Wavelength "
-        else:
-            title_str += f"Reflectance vs. Scattering Angle "
+
+        title_str += self.y_axis.currentText() + " vs. " # First add the y-axis variable being changed
+        title_str += f"{'Scattering Angle ' if self.graphmode == 2 else 'Wavelength '}" # Then add the x-axis variable
 
         # If multiple, legend_idxs likely has a nonzero length and will usually be the parameter passed to this
         # program. Loop through and determine where the plots are varying, then include those in the title.
@@ -887,11 +913,11 @@ class MainWindow(qt.QMainWindow):
             title_str += 'Across Various '
             i = 0
 
-            # Check to make sure every plot shown is a known distribution, and if not, indicate that min sizes, max sizes, and powlaws should be shown in title
+            # Check to make sure every plot shown is a named distribution, and if not, indicate that size distribution parameters should be shown in title
             known_params = True
             for plot in self.base_params:
-                sizedist_params = [float(plot[3]), float(plot[4]), float(plot[5]), float(plot[6]), float(plot[7]), float(plot[8])]
-                model_found = False
+                sizedist_params = [float(x) for x in plot[3:9]] # Cast each size distribution parameter of the plot to a float
+                model_found = False # We only need one instance of 'False' to conclude something other than named distributions exists
                 # Iterate through each distribution and try to find size distribution in parameters
                 for arr in vars.DATA_MODELS.values():
                     if sizedist_params == arr[0]:
@@ -902,6 +928,7 @@ class MainWindow(qt.QMainWindow):
                     known_params = False
                     break
 
+            # Now we loop over each element to add to the title
             while i < len(title_elements):
                 idx = title_elements[i] # Get the title element index
                 if idx == 0:
@@ -910,16 +937,18 @@ class MainWindow(qt.QMainWindow):
                     title_str += 'Compositions'
                 elif idx == 2:
                     title_str += 'Mixture Models'
+                # These are the distribution parameters
                 elif idx >= 3 and idx <= 8:
                     # If all of the parameters have known data models, include that
                     if known_params:
                         title_str += 'Data Models'
-                        # Skip max sizes, powerlaws, Rs, and Gs if changed
+                        # Skip max sizes, powerlaws, Rs, Gs, and x0s if all known data models
                         remaining_idxs = np.where(np.asarray(title_elements) > 8)[0]
                         if len(remaining_idxs) > 0:
                             i = remaining_idxs[0] - 1 # Will be incremented by 1 in the end, so need to decrement to keep constant
                         else:
                             break # The title is done
+                        # We can't just 'continue' because we might miss a comma and the grammar would be weird
                     elif idx == 3:
                         title_str += 'Minimum Sizes'
                     elif idx == 4:
@@ -948,7 +977,7 @@ class MainWindow(qt.QMainWindow):
                 if i < len(title_elements) - 2:
                     title_str += ', '
                 elif i == len(title_elements) - 2:
-                    if ',' in title_str:
+                    if ',' in title_str: # ALWAYS add the Oxford comma if 3+ items!
                         title_str += ', and '
                     else:
                         title_str += ' and '
@@ -968,7 +997,7 @@ class MainWindow(qt.QMainWindow):
         if 'Sensors' not in title_str:
             title_str = self.instrument.currentText() + ' ' + title_str
 
-        self.graph_widget.setTitle(title_str, color='k')
+        self.graph_widget.setTitle(title_str, color='k') # Update the graph title
 
     def track_changes(self):
         """
@@ -997,14 +1026,18 @@ class MainWindow(qt.QMainWindow):
         if len(self.comps) > 1:
             mix = self.mixture_model.checkedButton().text()
         else:
+            # This could be either areal or molecular. In single-material mixtures it doesn't matter which
+            # one is selected, so we match it to the first base_params entry to avoid the title saying we are
+            # varying mixture model upon adding single-material data.
             mix = self.base_params[-1][2]
 
         # If no control over sizedist data, then read distribution type and grab from vars file
         if self.smin_label is None:
             datamodel_params = vars.DATA_MODELS[self.dist_model.currentText()][0]
-        # If control over sizedist data, read from appropriate boxes
+        # If control over sizedist data, read from appropriate boxes, but only if the user can change them
         elif self.smin_label.isVisible():
             datamodel_params = [float(self.smin_box.text()), float(self.smax_box.text()), float(self.powlaw_box.text())]
+            # r, G, and x0 boxes may or may not be visible depending on fit model; always append 'NaN' as a backup
             if self.r_label is not None and self.r_label.isVisible():
                 datamodel_params.append(float(self.r_box.text()))
             else:
@@ -1029,7 +1062,7 @@ class MainWindow(qt.QMainWindow):
         else:
             tau = 'NaN'
 
-        # Check to see what to put in the legend, i.e. what has changed
+        # Create a new array of updated parameters
         updated_params = [self.instrument.currentText(),
                           compositions,
                           mix,
@@ -1041,7 +1074,7 @@ class MainWindow(qt.QMainWindow):
                           datamodel_params[5],
                           self.fit_model.currentText(),
                           tau,
-                          self.input_box.text()] # Get the new condition values
+                          self.input_box.text()]
 
         # Check where the new parameters do not match the base ones
         update_idxs = np.where(~(np.asarray(updated_params) == np.asarray(self.base_params[0])))[0]
@@ -1052,8 +1085,7 @@ class MainWindow(qt.QMainWindow):
         if updated_params in self.base_params[:-1]:
             return_idxs = None
         else:
-            # If the special error was triggered previously, it makes the array un-appendable. Fix this issue for
-            # the new iteration.
+            # If the special error was triggered previously, it makes the variable legend_idxs un-appendable. Fix this issue for the new iteration.
             if self.legend_idxs is None:
                 self.legend_idxs = []
             # Combine previous varying values with new values found to vary, sorted
@@ -1069,16 +1101,17 @@ class MainWindow(qt.QMainWindow):
         
         :param self: MainWindow object
         :param legend_idxs: Array of indices in base_params indicating which parameters are varying. 
-                            Shape (len(self.base_params))
+                            Shape (len(self.base_params[0]))
         """
         if len(legend_idxs) > 0: # Only loop if there are parameters to include in legend
             # Loop through each index in legend
             for i in range(len(self.legend.items)):
                 legend_str = ''
                 name = '' # String to hold a named distribution
-                combo = [self.base_params[i][3], self.base_params[i][4], self.base_params[i][5], self.base_params[i][6], self.base_params[i][7], self.base_params[i][8]]
+                combo = self.base_params[i][3:9] # This is similar to the process used to determine if there is an unnamed distribution for the title updating
                         
                 # Set the named distribution based on matching sizedists params, if any
+                # This one, unlike in the title updating, gets a name on a plot-by-plot basis
                 for model in vars.DATA_MODELS.keys():
                     if vars.DATA_MODELS[model][0] == combo:
                         name = model
@@ -1096,15 +1129,15 @@ class MainWindow(qt.QMainWindow):
                         comps_dict = self.base_params[i][item]
                         if len(comps_dict) == 1:
                             legend_str += next(iter(comps_dict)) # Gets first (and only) element of the dictionary
-                        else:
+                        else: # Format will be (v/v_MaterialA=X.X, v/v_MaterialB=Y.Y)
                             legend_str += '('
                             for j, key in enumerate(comps_dict.keys()):
                                 legend_str += f'v/v_{key}={comps_dict[key]}'
                                 # Add commas if before last element
                                 if len(comps_dict.keys()) > 1 and j < len(comps_dict.keys()) - 1:
-                                    legend_str += ', '
+                                    legend_str += ', ' # This needs no 'and' case
                             legend_str += ')'
-                    # smin, smax, powlaw, tau, and the input will be added numerically
+                    # smin, smax, powlaw, r, G, x0, tau, and the input will be added numerically
                     elif item >= 3 and item <= 8:
                         # Skip the remaining smax and tau if a named distribution
                         if len(name) > 0:
@@ -1131,7 +1164,7 @@ class MainWindow(qt.QMainWindow):
                         elif item == 8:
                             legend_str += f'x0={self.base_params[i][item]}'
                     elif item == 10:
-                        legend_str += f'tau={self.base_params[i][item]:.2s}'
+                        legend_str += f'tau={self.base_params[i][item]:.2s}' # Tau can have exponents. Best to put in scientific notation
                     elif item == 11:
                         legend_str += f"{self.base_params[i][item]}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}"
 
@@ -1242,8 +1275,8 @@ class MainWindow(qt.QMainWindow):
                         err_string += 'Volume fractions must be floats. '
                         self.comps[idx][1].setStyleSheet("border: 1px solid red;") # Turn erroneous box red
 
-         # If there is only one empty field and the summed v/v fractions fall short of 1, fill the empty v/v
-         # such that the fractions add to 1
+         # If there is only one empty/erroneous field and the summed v/v fractions fall short of 1, fill the 
+         # empty v/v so that the fractions add to 1
         if len(empty_item_idxs) == 1 and fraction_sum <= 1:
             err_string = err_string.replace('Volume fractions must be floats. ', '')
             self.comps[empty_item_idxs[0]][1].setText(str(round(1 - fraction_sum, 10)))
@@ -1322,7 +1355,7 @@ class MainWindow(qt.QMainWindow):
         for i in range(len(self.comps)):
             self.comps[i][1].setStyleSheet(f"border: 1px solid {color};")
 
-        # Turn size distribution boxes black if present
+        # Turn size distribution boxes to the chosen color if present
         if self.smin_label is not None:
             self.smin_box.setStyleSheet(f"border: 1px solid {color};")
             self.smax_box.setStyleSheet(f"border: 1px solid {color};")
@@ -1350,7 +1383,8 @@ class MainWindow(qt.QMainWindow):
 
         if autozoom:
             if self.base_params[-1][0] == None:
-                self.graph_widget.setRange(xRange=[-10, 10], yRange=[-10, 10]) # Default zoom if graph has just been cleared (base_params will have 1 row full of NoneTypes)
+                # Default zoom if graph has just been cleared (base_params will have 1 row full of NoneTypes)
+                self.graph_widget.setRange(xRange=[-10, 10], yRange=[-10, 10])
             else:
                 self.graph_widget.autoRange() # Window auto fit for the new dataset
 
@@ -1417,6 +1451,8 @@ class MainWindow(qt.QMainWindow):
             self.load_label.setText(err_string)
             # Parse error string to determine which boxes to turn red
             # If we have a min > max error it will turn both problematic boxes red!
+            # Note that these errors are caught separately from input parameter errors. As such, a graph can still
+            # update with these errors because they don't impede graph functionality, only rescaling
             if 'Min X' in err_string or 'min X' in err_string:
                 self.xmin_box.setStyleSheet(f"border: 1px solid red;")
             if 'Max X' in err_string:
@@ -1434,6 +1470,7 @@ class MainWindow(qt.QMainWindow):
         :param self: MainWindow object
         """
         # Check to see if the Custom option is selected and the widgets haven't been created yet
+        # Henyey-Greenstein graphs cannot have custom size distributions
         if self.dist_model.currentText() == 'Custom' and self.smin_label is None and not self.fit_model.currentText() == 'Henyey-Greenstein':
             self.smin_label = qt.QLabel("Min S:")
             self.smin_box = qt.QLineEdit()
@@ -1460,6 +1497,7 @@ class MainWindow(qt.QMainWindow):
             self.layout.addWidget(self.smax_box, size_params_row + 1, 1, 1, 2)
             self.layout.addWidget(self.powlaw_label, size_params_row + 2, 0, 1, 1)
             self.layout.addWidget(self.powlaw_box, size_params_row + 2, 1, 1, 2)
+        # Switching away from Custom model will not hide but CLEAR sizedist boxes
         else:
             if self.smin_label is not None:
                 # Shift rows up
@@ -1480,6 +1518,8 @@ class MainWindow(qt.QMainWindow):
                 self.powlaw_label = None
                 self.powlaw_box = None
         # Update regardless of if boxes were removed or not
+        # change_fitmodel updates off of change dist model because change_fitmodel does the work of checking if r,
+        # G, and x0 should show in the GUI based on what the fit model allows
         self.change_fitmodel(update=False)
 
     def change_fitmodel(self, update=True):
@@ -1488,7 +1528,7 @@ class MainWindow(qt.QMainWindow):
         distributions model if a custom distribution is selected.
 
         :param self: MainWindow object
-        :param update: Boolean, whether to call update_graph on finish. Can be overrided if not a custom size
+        :param update: Boolean, whether to call update_graph on finish. Is overrided to True if not a custom size
                        distribution.
         """
         # If Henyey-Greenstein is selected and Custom sizedist is selected, revert to G-ring-like and remove custom boxes
@@ -1496,23 +1536,20 @@ class MainWindow(qt.QMainWindow):
             self.dist_model.setCurrentText('G-ring-like')
             self.change_distmodel()
 
-        # First always remove G, r, and x0 boxes
+        # First always remove G, r, and x0 boxes. Here we clear them rather than hide them.
         if self.r_label is not None:
-            # Delete this row
             self.mknewrow(self.row_widget(self.r_label) + 1, -1)
             self.layout.removeWidget(self.r_label)
             self.r_label = None
             self.layout.removeWidget(self.r_box)
             self.r_box = None
         if self.G_label is not None:
-            # Delete this row
             self.mknewrow(self.row_widget(self.G_label) + 1, -1)
             self.layout.removeWidget(self.G_label)
             self.G_label = None
             self.layout.removeWidget(self.G_box)
             self.G_box = None
         if self.x0_label is not None:
-            # Delete this row
             self.mknewrow(self.row_widget(self.x0_label) + 1, -1)
             self.layout.removeWidget(self.x0_label)
             self.x0_label = None
@@ -1522,9 +1559,10 @@ class MainWindow(qt.QMainWindow):
         # Re-add any boxes relevant to the fit model & data model
         if self.smin_label is not None:
 
-            # Examine the current fit model to see if it allows for modification of G or r
+            # Examine the current fit model to see if it allows for modification of G, r, or x0
             fit = self.fit_model.currentText()
             if fit == "Semi-Empirical Mie":
+                # Semi-Empirical Mie requires r, G, and x0
                 self.r_label = qt.QLabel("R:")
                 self.r_box = qt.QLineEdit()
                 self.G_label = qt.QLabel("G:")
@@ -1549,6 +1587,7 @@ class MainWindow(qt.QMainWindow):
                 self.layout.addWidget(self.x0_box, r_row + 2, 1, 1, 2)
 
             elif fit == "Mie Diffraction":
+                # Mie Diffraction only requires r
                 self.r_label = qt.QLabel("R:")
                 self.r_box = qt.QLineEdit()
                 self.r_box.returnPressed.connect(self.update_graph)
@@ -1559,7 +1598,9 @@ class MainWindow(qt.QMainWindow):
                 self.mknewrow(r_row, 1)
                 self.layout.addWidget(self.r_label, r_row, 0, 1, 1)
                 self.layout.addWidget(self.r_box, r_row, 1, 1, 2)
+
             elif fit == "Mie Transmission":
+                # Mie Transmission only requires G
                 self.G_label = qt.QLabel("G:")
                 self.G_box = qt.QLineEdit()
                 self.G_box.returnPressed.connect(self.update_graph)
@@ -1579,14 +1620,14 @@ class MainWindow(qt.QMainWindow):
 
     def change_yaxis(self):
         """
-        A method to change the Y axis of the graph between reflectance and phase function (phase function is reflectance normalized
-        such that the integral over all solid angles is 1).
+        A method to change the Y axis of the graph between reflectance and phase function (phase function is 
+        reflectance normalized such that the integral over all solid angles is 1).
         
         :param self: MainWindow object
         """
         if self.y_axis.currentText() == 'Reflectance':
             self.graph_widget.setLabel('left', 'Reflectance', units='I/F', color='k') # Units are I/F
-            # Only allow if not reflectance spectrum
+            # Henyey-Greenstein gets added because Reflectance supports it
             if not self.graphmode == 0 and self.fit_model.findText("Henyey-Greenstein") < 0:
                 self.fit_model.addItems(["Henyey-Greenstein"]) # Not possible to have multiple, since text has to change to trigger this
             # Show tau again because reflectance depends on it
@@ -1601,7 +1642,7 @@ class MainWindow(qt.QMainWindow):
         elif self.y_axis.currentText() == 'Phase Function':
             self.graph_widget.setLabel('left', 'Phase Function', units='dim', color='k') # Units are dimensionless
             # Remove Henyey-Greenstein from the y-axis dropdown list since it is not supported in phase function plots
-            # If it's in there, it will switch to the first option in the list (by default it switches to the option above HG)
+            # If it's in there, it will switch to the first option in the list (by default it would switch to the option above HG)
             # If it's not, the remove will fail silently
             if self.fit_model.currentText() == "Henyey-Greenstein":
                 self.fit_model.setCurrentText("Semi-Empirical Mie")
@@ -1616,7 +1657,7 @@ class MainWindow(qt.QMainWindow):
                 self.tau_label.setVisible(False)
                 self.tau_box.setVisible(False)
 
-        elif self.y_axis.currentText() == 'Albedo':
+        elif self.y_axis.currentText() == 'Albedo': # Tau and Henyey-Greenstein will get removed elsewhere
             self.graph_widget.setLabel('left', 'Albedo', units='dim', color='k') # Units are dimensionless
 
         self.clear_graph() # Clear the graph to avoid any issues with previous data
