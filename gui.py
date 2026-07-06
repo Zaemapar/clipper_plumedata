@@ -473,7 +473,7 @@ class MainWindow(qt.QMainWindow):
             self.fit_model.setVisible(False)
 
             # Also hide tau if visible
-            if self.tau_label.isVisible():
+            if not self.tau_label.isHidden():
                 self.mknewrow(self.row_widget(self.input_box), -1)
                 self.layout.removeWidget(self.tau_label)
                 self.tau_label.setVisible(False)
@@ -712,7 +712,7 @@ class MainWindow(qt.QMainWindow):
                 
                 # Get the new x and y datasets if no errors
                 self.x_data, self.y_data = utils.output_graph(self.graphmode, updated_params[0], updated_params[1], updated_params[2], [updated_params[3], updated_params[4], updated_params[5], updated_params[6], updated_params[7], updated_params[8]], updated_params[9], float(updated_params[11]), updated_params[10], wavelbounds=(self.comp_min_wavel, self.comp_max_wavel), output=self.y_axis.currentText())
-                
+
                 # Plot the dataset if not in the graph, else change the current unsaved graph
                 if self.ifs not in self.graph_widget.plotItem.items:
                     self.ifs = self.graph_widget.plot(self.x_data, self.y_data, pen=self.plt_pen, name=(f"{self.param_str}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}" if self.multiple else None))
@@ -1035,20 +1035,20 @@ class MainWindow(qt.QMainWindow):
         if self.smin_label is None:
             datamodel_params = vars.DATA_MODELS[self.dist_model.currentText()][0]
         # If control over sizedist data, read from appropriate boxes, but only if the user can change them
-        elif self.smin_label.isVisible():
+        elif not self.smin_label.isHidden():
             datamodel_params = [float(self.smin_box.text()), float(self.smax_box.text()), float(self.powlaw_box.text())]
             # r, G, and x0 boxes may or may not be visible depending on fit model; always append 'NaN' as a backup
-            if self.r_label is not None and self.r_label.isVisible():
+            if self.r_label is not None and not self.r_label.isHidden():
                 datamodel_params.append(float(self.r_box.text()))
             else:
                 datamodel_params.append('NaN')
             
-            if self.G_label is not None and self.G_label.isVisible():
+            if self.G_label is not None and not self.G_label.isHidden():
                 datamodel_params.append(float(self.G_box.text()))
             else:
                 datamodel_params.append('NaN')
             
-            if self.x0_label is not None and self.x0_label.isVisible():
+            if self.x0_label is not None and not self.x0_label.isHidden():
                 datamodel_params.append(float(self.x0_box.text()))
             else:
                 datamodel_params.append('NaN')
@@ -1057,7 +1057,7 @@ class MainWindow(qt.QMainWindow):
             datamodel_params = ['NaN', 'NaN', 'NaN', 'NaN', 'NaN', 'Nan']
 
         # Only grab tau if changeable, i.e. if y-axis is reflectance
-        if self.tau_label.isVisible():
+        if not self.tau_label.isHidden():
             tau = self.tau_box.text()
         else:
             tau = 'NaN'
@@ -1631,7 +1631,7 @@ class MainWindow(qt.QMainWindow):
             if not self.graphmode == 0 and self.fit_model.findText("Henyey-Greenstein") < 0:
                 self.fit_model.addItems(["Henyey-Greenstein"]) # Not possible to have multiple, since text has to change to trigger this
             # Show tau again because reflectance depends on it
-            if not self.tau_label.isVisible():
+            if self.tau_label.isHidden():
                 tau_row = self.row_widget(self.fit_label) + 1
                 self.mknewrow(tau_row, 1)
                 self.layout.addWidget(self.tau_label, tau_row, 0, 1, 1)
@@ -1649,7 +1649,7 @@ class MainWindow(qt.QMainWindow):
             self.fit_model.removeItem(self.fit_model.findText("Henyey-Greenstein"))
 
             # Hide tau, phase function does not depend on it
-            if self.tau_label.isVisible():
+            if not self.tau_label.isHidden():
                 tau_row = self.row_widget(self.tau_label)
                 self.mknewrow(tau_row + 1, -1)
                 self.layout.removeWidget(self.tau_label)

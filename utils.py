@@ -1,3 +1,10 @@
+"""
+A file containing various helper methods to organize and read files, perform major computations relating to
+scattering theories, or output graphs given an input dataset.
+Author: Parker A. Zaemann
+Date: 06 Jul 2026
+"""
+
 import numpy as np
 import scipy as sp
 import scipy.optimize
@@ -499,19 +506,21 @@ def output_graph(graphmode, sensor, comps, mixmodel, datamodel, fitmodel, param,
               List containing float reflectance/phase function data values
     """
 
-    # Try to extract r, G, and tau from the data; however, they may not be present for various reasons
-    try:
-        r = float(datamodel[3])
-    except Exception:
+    # Try to extract r, G, and tau from the data; if they are NaNs, set them to their default values
+    if datamodel[3] == 'NaN':
         r = 0
-    try:
-        G = float(datamodel[4])
-    except Exception:
+    else:
+        r = float(datamodel[3])
+
+    if datamodel[4] == 'NaN':
         G = 1
-    try:
-        tau = float(tau)
-    except Exception:
+    else:
+        G = float(datamodel[4])
+
+    if tau == 'NaN':
         tau = 0
+    else:
+        tau = float(tau)
     
     if fitmodel == 'Semi-Empirical Mie':
         x0 = float(datamodel[5])
