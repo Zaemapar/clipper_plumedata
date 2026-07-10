@@ -1,6 +1,0 @@
-numpy
-scipy<=1.13.0
-matplotlib
-PyMieScatt
-PyQt6
-pyqtgraph
