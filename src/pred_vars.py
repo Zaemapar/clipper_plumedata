@@ -1,13 +1,14 @@
 """
 A helper file containing all data relating to Clipper's instruments and the named size distributions available for
 selection in the GUI.
+
 Author: Parker A. Zaemann
-Date: 06 Jul 2026
+Date: 09 Jul 2026
+Source: https://github.com/Zaemapar/clipper_plumedata
+Contact: mhedman@uidaho.edu
 """
-import numpy as np
 
 # --- PREDICTION FILE PARAMETERS ---
-TAU = 1e-6 # Optical depth
 INSTRUMENTS = {'NAC': [0.358, 1.050], 'WAC': [0.370, 1.050], 'MISE': [0.8, 5], 'Europa-UVS': [0.055, 0.206]}
 # For each size distribution, the first index of the 2d array is the size distribution parameters for the semi-empirical Mie theory [smin, smax, powlaw, r, G, x0]
 # The second is the Henyey-Greenstein function parameters [w1, g1, w2, g2]

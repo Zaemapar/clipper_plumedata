@@ -3,8 +3,11 @@ A program for computing the best-fit semi-empirical Mie distribution or Henyey-
 Greenstein function for a given dataset of reflectance vs. scattering angle, outputting
 all optimized fit parameters and a graph of the best-fit curve superimposed on the original
 dataset.
+
 Author: Parker A. Zaemann
 Date: 06 Jul 2026
+Source: https://github.com/Zaemapar/clipper_plumedata
+Contact: mhedman@uidaho.edu
 """
 # Import all the required libraries
 import numpy as np

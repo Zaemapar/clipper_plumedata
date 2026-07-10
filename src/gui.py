@@ -1,3 +1,15 @@
+"""
+A script to set up the main GUI for plotting plume spectra dynamically while varying various parameters. Takes
+input size distribution, instrument wavelength range, optical depth, and material composition, among others, and
+creates plots for each combination of parameters, allowing for multiple plots on the same window and switching 
+between plotting reflectance vs. wavelength, surface albedo vs. wavelength, and reflectance vs. scattering angle.
+
+Author: Parker A. Zaemann
+Date: 09 July 2026
+Source: https://github.com/Zaemapar/clipper_plumedata
+Contact: mhedman@uidaho.edu
+"""
+
 import sys
 import pyqtgraph as pg
 import pyqtgraph.exporters
@@ -25,7 +37,7 @@ class MainWindow(qt.QMainWindow):
         # --- MAIN WINDOW PROPERTIES ---
         # Title and sizing
         self.setWindowTitle("Scattera Clipper Instrument Spectrum Prediction")
-        self.resize(1200, 800)
+        self.resize(1500, 1100)
 
         # QMainWindow requires a central widget to hold everything else
         self.central_widget = qt.QWidget()
@@ -88,6 +100,15 @@ class MainWindow(qt.QMainWindow):
         # By default, semi-empirical Mie (as implemented by Pollack & Cuzzi, 1980) is used. The others are to get different components of the Mie function.
         # Since the default is reflectance vs. wavelength, Henyey-Greenstein won't be added yet
         self.fit_model.addItems(["Semi-Empirical Mie", "Pure Mie", "Mie Diffraction", "Mie External Reflection", "Mie Transmission"])
+
+        # Slider to use in selecting size distribution size for Semi-Empirical Mie, Pure Mie, and Mie Diffraction scattering theories
+        self.dist_slider = qt.QSlider(qc.Qt.Orientation.Horizontal)
+        self.dist_slider.setMinimum(2)
+        self.dist_slider.setMaximum(100)
+        self.dist_slider.setValue(51)
+        self.dist_slider.setTickPosition(qt.QSlider.TickPosition.TicksBelow)
+        self.dist_slider.setTickInterval(10)
+        self.slider_label = qt.QLabel(f"Number of Sizes: {self.dist_slider.value()}")
 
         # Entry box for manual optical depth input. Will only be shown if the y-axis of the graph is 'reflectance'
         self.tau_label = qt.QLabel("Optical Depth (dim):")
@@ -212,6 +233,7 @@ class MainWindow(qt.QMainWindow):
                     vars.SIZEDISTS['G-ring-like'][0][4], # G parameter for semi-empirical Mie, varies with size distribution
                     vars.SIZEDISTS['G-ring-like'][0][5], # x0 parameter for semi-empirical Mie, varies with size distribution
                     self.fit_model.currentText(), # Which scattering theory to use
+                    self.dist_slider.value(), # Size distribution resolution
                     self.tau_box.text(), # Optical depth
                     [self.input_box.text(), self.input_label.currentText()]]] # Varying parameter (wavelength, grain size, scattering angle, phase angle)
         self.legend_idxs = [] # Array to hold base parameter indexes to include in the legends, i.e. those that change at some point in base_param's history
@@ -237,6 +259,10 @@ class MainWindow(qt.QMainWindow):
         # The size distribution model and the scattering theory need special functions to handle custom distribution inputs
         self.dist_model.currentTextChanged.connect(self.change_distmodel)
         self.fit_model.currentTextChanged.connect(self.change_fitmodel)
+
+        # The slider will NOT be connected to update_graph because it is purely a performance improvement tool
+        # It merely updateds the displayed size count
+        self.dist_slider.valueChanged.connect(self.update_slider)
 
         # Changing anything about the composition replots the data
         self.comps[0][0].currentTextChanged.connect(self.update_graph)
@@ -315,16 +341,16 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.instrument, 5, 1, 1, 2)
 
         # All these widgets are overlaid on top of each other (home in top left, xmin/max & ymin/max in top right)
-        self.layout.addWidget(self.graph_widget, 0, 3, 16, 16)
+        self.layout.addWidget(self.graph_widget, 0, 3, 24, 24)
         self.layout.addWidget(self.home_button, 1, 4, 1, 1)
-        self.layout.addWidget(self.xmin_label, 1, 15, 1, 1)
-        self.layout.addWidget(self.xmin_box, 1, 16, 1, 1)
-        self.layout.addWidget(self.xmax_label, 1, 17, 1, 1)
-        self.layout.addWidget(self.xmax_box, 1, 18, 1, 1)
-        self.layout.addWidget(self.ymin_label, 2, 15, 1, 1)
-        self.layout.addWidget(self.ymin_box, 2, 16, 1, 1)
-        self.layout.addWidget(self.ymax_label, 2, 17, 1, 1)
-        self.layout.addWidget(self.ymax_box, 2, 18, 1, 1)
+        self.layout.addWidget(self.xmin_label, 1, 23, 1, 1)
+        self.layout.addWidget(self.xmin_box, 1, 24, 1, 1)
+        self.layout.addWidget(self.xmax_label, 1, 25, 1, 1)
+        self.layout.addWidget(self.xmax_box, 1, 26, 1, 1)
+        self.layout.addWidget(self.ymin_label, 2, 23, 1, 1)
+        self.layout.addWidget(self.ymin_box, 2, 24, 1, 1)
+        self.layout.addWidget(self.ymax_label, 2, 25, 1, 1)
+        self.layout.addWidget(self.ymax_box, 2, 26, 1, 1)
 
         # These two will get replaced by a table if multi-material mixture is enabled
         # Only one new row will be inserted for the mix model if this is the case
@@ -336,21 +362,23 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.dist_model, 7, 1, 1, 2)
         self.layout.addWidget(self.fit_label, 8, 0, 1, 1)
         self.layout.addWidget(self.fit_model, 8, 1, 1, 2)
-        self.layout.addWidget(self.tau_label, 9, 0, 1, 1)
-        self.layout.addWidget(self.tau_box, 9, 1, 1, 2)
-        self.layout.addWidget(self.input_label, 10, 0, 1, 1)
-        self.layout.addWidget(self.input_box, 10, 1, 1, 2)
-        self.layout.addWidget(self.x_axis_label, 11, 0, 1, 1)
-        self.layout.addWidget(self.x_axis, 11, 1, 1, 2)
-        self.layout.addWidget(self.y_axis_label, 12, 0, 1, 1)
-        self.layout.addWidget(self.y_axis, 12, 1, 1, 2)
-        self.layout.addWidget(self.x_scale_label, 13, 0, 1, 1)
-        self.layout.addWidget(self.x_linear, 13, 1, 1, 1)
-        self.layout.addWidget(self.x_log, 13, 2, 1, 1)
-        self.layout.addWidget(self.y_scale_label, 14, 0, 1, 1)
-        self.layout.addWidget(self.y_linear, 14, 1, 1, 1)
-        self.layout.addWidget(self.y_log, 14, 2, 1, 1)
-        self.layout.addWidget(self.load_label, 15, 0, 2, 2)
+        self.layout.addWidget(self.slider_label, 9, 0, 1, 1)
+        self.layout.addWidget(self.dist_slider, 9, 1, 1, 2)
+        self.layout.addWidget(self.tau_label, 10, 0, 1, 1)
+        self.layout.addWidget(self.tau_box, 10, 1, 1, 2)
+        self.layout.addWidget(self.input_label, 11, 0, 1, 1)
+        self.layout.addWidget(self.input_box, 11, 1, 1, 2)
+        self.layout.addWidget(self.x_axis_label, 12, 0, 1, 1)
+        self.layout.addWidget(self.x_axis, 12, 1, 1, 2)
+        self.layout.addWidget(self.y_axis_label, 13, 0, 1, 1)
+        self.layout.addWidget(self.y_axis, 13, 1, 1, 2)
+        self.layout.addWidget(self.x_scale_label, 14, 0, 1, 1)
+        self.layout.addWidget(self.x_linear, 14, 1, 1, 1)
+        self.layout.addWidget(self.x_log, 14, 2, 1, 1)
+        self.layout.addWidget(self.y_scale_label, 15, 0, 1, 1)
+        self.layout.addWidget(self.y_linear, 15, 1, 1, 1)
+        self.layout.addWidget(self.y_log, 15, 2, 1, 1)
+        self.layout.addWidget(self.load_label, 16, 0, 2, 2)
         
         # There are default settings in the input boxes, so output the first graph
         self.change_input() # First update the placeholder texts
@@ -382,6 +410,15 @@ class MainWindow(qt.QMainWindow):
             # Add back the options for phase function & reflectance for the y-axis
             # This will switch back to reflectance by default
             self.y_axis.addItems(["Reflectance", "Phase Function"])
+
+            # Check to see if the nsizes slider should be displayed. If so, add it after fit_model
+            if self.slider_label is not None:
+                slider_row = self.row_widget(self.fit_model) + 1
+                self.mknewrow(slider_row, 1)
+                self.layout.addWidget(self.slider_label, slider_row, 0, 1, 1)
+                self.layout.addWidget(self.dist_slider, slider_row, 1, 1, 2)
+                self.slider_label.setVisible(True)
+                self.dist_slider.setVisible(True)
 
             # If we set the distribution to custom before, we re-add all the size distribution boxes
             if self.smin_label is not None:
@@ -494,7 +531,7 @@ class MainWindow(qt.QMainWindow):
                     self.x0_box.setVisible(False)
 
             # Hide all unnecessary widgets (only the input param is needed)
-            self.mknewrow(self.row_widget(self.input_box), -2)
+            self.mknewrow(self.row_widget(self.dist_label) + 2, -2)
             self.layout.removeWidget(self.dist_label)
             self.dist_label.setVisible(False)
             self.layout.removeWidget(self.dist_model)
@@ -504,6 +541,14 @@ class MainWindow(qt.QMainWindow):
             self.layout.removeWidget(self.fit_model)
             self.fit_model.setVisible(False)
 
+            # Also hide slider if present
+            if self.slider_label is not None:
+                self.mknewrow(self.row_widget(self.slider_label) + 1, -1)
+                self.layout.removeWidget(self.slider_label)
+                self.layout.addWidget(self.dist_slider)
+                self.slider_label.setVisible(False)
+                self.dist_slider.setVisible(False)
+
             # Also hide tau if visible
             if not self.tau_label.isHidden():
                 self.mknewrow(self.row_widget(self.input_box), -1)
@@ -511,6 +556,7 @@ class MainWindow(qt.QMainWindow):
                 self.tau_label.setVisible(False)
                 self.layout.removeWidget(self.tau_box)
                 self.tau_box.setVisible(False)
+
 
             # Remove phase function & reflectance from the y-axis dropdown list since it is not supported in surface spectra plots
             # Albedo is currently the only supported y-axis value for those plots
@@ -758,7 +804,7 @@ class MainWindow(qt.QMainWindow):
                 self.plt_pen.setColor(pg.mkColor(COLOR_ARR[self.last_color_idx]))
                 # Get the new x and y datasets if no errors
                 # Angle will be converted to scattering angle for reflectance calculations
-                self.x_data, self.y_data = utils.output_graph(self.graphmode, updated_params[0], updated_params[1], updated_params[2], [updated_params[3], updated_params[4], updated_params[5], updated_params[6], updated_params[7], updated_params[8]], updated_params[9], (float(updated_params[11][0]) if 'Phase Angle' not in self.input_label.currentText() else 180 - float(updated_params[11][0])), updated_params[10], wavelbounds=(self.comp_min_wavel[1], self.comp_max_wavel[1]), output=[self.x_axis.currentText(), self.y_axis.currentText()])
+                self.x_data, self.y_data = utils.output_graph(self.graphmode, updated_params[0], updated_params[1], updated_params[2], [updated_params[3], updated_params[4], updated_params[5], updated_params[6], updated_params[7], updated_params[8]], updated_params[9], (float(updated_params[12][0]) if 'Phase Angle' not in self.input_label.currentText() else 180 - float(updated_params[12][0])), updated_params[11], nsizes=updated_params[10], wavelbounds=(self.comp_min_wavel[1], self.comp_max_wavel[1]), output=[self.x_axis.currentText(), self.y_axis.currentText()])
                 # Plot the dataset if not in the graph, else change the current unsaved graph
                 if self.ifs not in self.graph_widget.plotItem.items:
                     self.ifs = self.graph_widget.plot(self.x_data, self.y_data, pen=self.plt_pen, name=(f"{self.param_str}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}" if self.multiple else None))
@@ -858,7 +904,7 @@ class MainWindow(qt.QMainWindow):
         self.legend = None # Erase stored legend
         # Erase all base parameters and varying parameters
         self.legend_idxs = []
-        self.base_params = [[None, None, 'Molecular', None, None, None, None, None, None, None, None, [None, None]]]
+        self.base_params = [[None, None, 'Molecular', None, None, None, None, None, None, None, None, None, [None, None]]]
 
         self.all_borders('black') # Remove all error red borders
 
@@ -1013,8 +1059,10 @@ class MainWindow(qt.QMainWindow):
                 elif idx == 9:
                     title_str += 'Scattering Theories'
                 elif idx == 10:
-                    title_str += 'Optical Depths'
+                    title_str += 'Resolutions'
                 elif idx == 11:
+                    title_str += 'Optical Depths'
+                elif idx == 12:
                     if self.graphmode == 0:
                         # Check to see whether there are different kinds of angles being plotted
                         angle_slice = [entry[-1][1] for entry in self.base_params]
@@ -1112,6 +1160,12 @@ class MainWindow(qt.QMainWindow):
         else:
             datamodel_params = ['NaN', 'NaN', 'NaN', 'NaN', 'NaN', 'Nan']
 
+        # Only grab size distribution resolution if slider is displayed
+        if self.slider_label is not None and not self.slider_label.isHidden():
+            res = self.dist_slider.value()
+        else:
+            res = 'NaN'
+
         # Only grab tau if changeable, i.e. if y-axis is reflectance
         if not self.tau_label.isHidden():
             tau = self.tau_box.text()
@@ -1129,6 +1183,7 @@ class MainWindow(qt.QMainWindow):
                           datamodel_params[4],
                           datamodel_params[5],
                           self.fit_model.currentText(),
+                          res,
                           tau,
                           [self.input_box.text(), self.input_label.currentText()]]
 
@@ -1229,8 +1284,10 @@ class MainWindow(qt.QMainWindow):
                         elif item == 8:
                             legend_str += f'x0={self.base_params[i][item]}'
                     elif item == 10:
-                        legend_str += f'tau={float(self.base_params[i][item]):.2e}' # Tau can have exponents. Best to put in scientific notation
+                        legend_str += f'nsizes={self.base_params[i][item]}'
                     elif item == 11:
+                        legend_str += f'tau={float(self.base_params[i][item]):.2e}' # Tau can have exponents. Best to put in scientific notation
+                    elif item == 12:
                         legend_str += f"{self.base_params[i][item][0]}{' μm' if (self.graphmode == 1 or self.graphmode == 2) else '°'}"
                         # If there are multiple types of angles, signify which type of angle this is
                         if multiple_angle_types:
@@ -1606,7 +1663,31 @@ class MainWindow(qt.QMainWindow):
         # If Henyey-Greenstein is selected and Custom sizedist is selected, revert to G-ring-like and remove custom boxes
         if self.fit_model.currentText() == 'Henyey-Greenstein' and self.dist_model.currentText() == 'Custom':
             self.dist_model.setCurrentText('G-ring-like')
-            self.change_distmodel()
+            self.change_distmodel() 
+
+        # Remove the nsizes slider if it shouldn't be there. Otherwise, add it after the fit model
+        if self.fit_model.currentText() == 'Semi-Empirical Mie' or self.fit_model.currentText() == 'Pure Mie' or self.fit_model.currentText() == 'Mie Diffraction':
+            if self.slider_label is None:
+                self.dist_slider = qt.QSlider(qc.Qt.Orientation.Horizontal)
+                self.dist_slider.setMinimum(2)
+                self.dist_slider.setMaximum(100)
+                self.dist_slider.setValue(51)
+                self.dist_slider.setTickPosition(qt.QSlider.TickPosition.TicksBelow)
+                self.dist_slider.setTickInterval(10)
+                self.slider_label = qt.QLabel(f"Number of Sizes: {self.dist_slider.value()}")
+                self.dist_slider.valueChanged.connect(self.update_slider)
+
+                slider_row = self.row_widget(self.fit_label) + 1
+                self.mknewrow(slider_row, 1)
+                self.layout.addWidget(self.slider_label, slider_row, 0, 1, 1)
+                self.layout.addWidget(self.dist_slider, slider_row, 1, 1, 2)
+        else:
+            if not self.slider_label is None:
+                self.mknewrow(self.row_widget(self.slider_label) + 1, -1)
+                self.layout.removeWidget(self.slider_label)
+                self.layout.removeWidget(self.dist_slider)
+                self.slider_label = None
+                self.dist_slider = None
 
         # First always remove G, r, and x0 boxes. Here we clear them rather than hide them.
         if self.r_label is not None:
@@ -1627,7 +1708,6 @@ class MainWindow(qt.QMainWindow):
             self.x0_label = None
             self.layout.removeWidget(self.x0_box)
             self.x0_box = None
-
         # Re-add any boxes relevant to the scattering theory & size distribution
         if self.smin_label is not None:
 
@@ -1766,6 +1846,17 @@ class MainWindow(qt.QMainWindow):
 
         if update:
             self.update_graph()
+    
+    def update_slider(self, value):
+        """
+        A function that handles changes in the size distribution slider, updating the displayed value in
+        slider_label and displaying a warning message that the graph has not been updated.
+
+        :param self: MainWindow object
+        :param value: The integer current position of the slider
+        """
+        self.slider_label.setText(f"Number of Sizes: {value}")
+        self.load_label.setText("Graph is not updated. Edit another field to update graph.")
 
 class StableTable(qt.QTableWidget):
     """
