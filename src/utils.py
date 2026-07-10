@@ -283,6 +283,48 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
             Q_SS = 0
             Q_SA = 0
             if len(small_idxs) > 0:
+                # There is a specific case for which this needs to be optimized, otherwise the code will take eons to run
+                # If only the mie theory is needed and the output is requested in reflectances, there is a shortcut we can take.
+                if section == 'Pure Mie' and output == 'Reflectance':
+                    # Use PyMieScatt to compute scattering angles and intensities in the small regime
+                    # Takes wavelength & diameters in nanometers, so need to convert from microns
+                    # Note how this shortcut allows us to calculate the scattering intensity only within the angle range
+                    # This is because reflectance doesn't have to be normalized by integrating over all solid angles
+                    theta1, SL, SR, SU_small = PyMie.SF_SD(m, wavel*1000, small_diameters*1000, small_dist,
+                                            minAngle=theta_min, maxAngle=theta_max,
+                                            angularResolution=1.0, space='theta')
+                    # Calculate Q coefficients given the data, also applying conversions
+                    qdict = PyMie.Mie_SD(m, wavel*1000., small_diameters*1000, small_dist, asDict=True)
+
+                    # Extract extinction coefficient. PyMieScatt applies 10^-6 scale factor assuming
+                    # we input size distribution in inverse cubic centimeters, and so outputs inverse
+                    # megameters. But we input inverse cubic microns, and we want our output in
+                    # inverse meters. This will work perfectly, but we do need to undo the 10^-6 
+                    # scale factor.
+                    bext = qdict['Bext'] * 1.e6
+
+                    # Calculate tau for this wavelength from first available reflectance if tau is not provided
+                    if tau is None:
+                        tau_wavel = ref_if * bext * 4 * np.pi / (SU_small[0] * (wavel*1000)**2)
+                    else:
+                        # Otherwise, we use a fixed tau for all wavelengths
+                        tau_wavel = tau
+
+                    # Calculate reflectance, converting wavelength to nanometers. SU_small is in the
+                    # same units as sizedists, meaning we have square nanometers over cubic microns,
+                    # which is the same as inverse meters. Our units thus cancel assuming tau and 
+                    # reflectances are unitless.
+                    # If this is being curve-fit to data and tau is input as None, this should make
+                    # the output reflectance and input reflectance match at theta=angle_range[0]
+                    refl=np.asarray(SU_small)*(wavel*1000)**2/(4*np.pi)*tau_wavel/bext
+
+                    # Append to relevant arrays
+                    output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * refl
+                    taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau_wavel
+                    
+                    # Skip everything else
+                    continue
+
                 # Use PyMieScatt to compute scattering angles and intensities in the small regime
                 # Takes wavelength & diameters in nanometers, so need to convert from microns
                 theta1, SL, SR, SU_small = PyMie.SF_SD(m, wavel*1000, small_diameters*1000, small_dist,
@@ -431,17 +473,20 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                 output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * P_star
  
             elif output == 'Reflectance':
+                omega_0 = Q_star_S / Q_star_E
+
                 # Calculate tau from first available reflectance if not provided
                 if tau is None:
                     # For a single scattering cloud, Reflectance = 0.25 * (Q_star_S / Q_star_E) * P_star * tau
-                    omega_0 = Q_star_S / Q_star_E
-                    tau = ref_if / (0.25 * omega_0 * P_star[0])
+                    tau_wavel = ref_if / (0.25 * omega_0 * P_star[0])
+                else:
+                    tau_wavel = tau
+
 
                 # Calculate reflectance using scattering data
-                omega_0 = Q_star_S / Q_star_E
-                refl = 0.25 * omega_0 * P_star * tau
+                refl = 0.25 * omega_0 * P_star * tau_wavel
                 output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * refl
-                taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau
+                taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau_wavel
 
     # Return a reflectances/phase functions as well as tau
     return output_arr.tolist(), taus.tolist()

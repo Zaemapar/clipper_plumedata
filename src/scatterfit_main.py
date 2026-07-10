@@ -92,7 +92,9 @@ if __name__ == "__main__":
             return np.log10(reflectances) # Fit will be done to log scale
 
         # Obtain the optical constants at the desired wavelength
-        n,k=utils.get_nk([vars.WAVEL], {vars.COMP: 1}, returnmode=['single', vars.WAVEL])
+        ns,ks=utils.get_nk([vars.WAVEL], {vars.COMP: 1})
+        # There will only be one wavelength in each array
+        n, k = ns[0], ks[0]
         m = complex(n, k) # Compute complex refractive index
 
         # Provide initial guesses and bounds (with slight asymmetry to avoid singular jacobian)
