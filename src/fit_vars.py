@@ -34,7 +34,7 @@ G_MAX = 10
 x0_MIN = 0
 x0_MAX = 10
 
-NSIZE=51 # Number of sizes to include in distribution (resolution)
+NSIZE=['Linear', 51] # Number of sizes to include in distribution (resolution)
 COMP = 'Water Ice' # Composition of material. Currently only this is supported.
 WAVEL = 0.647 # Given reading wavelength of instrument
 WAVEL_SNAPSHOT_ANGLE = 20 # Once size distribution is determined at WAVEL, angle will be fixed to this and wavelength varied to examine effects
@@ -48,4 +48,4 @@ WMIN = 0
 WMAX = 10e-5
 
 # Path to data file
-DATA_PATH = os.path.join("data", DATA_FILE)
+DATA_PATH = os.path.join("../data", DATA_FILE)

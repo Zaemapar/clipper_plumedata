@@ -15,10 +15,11 @@ import csv
 import matplotlib.pyplot as plt
 import PyMieScatt as PyMie
 import fit_vars as vars
-import pred_vars as pvars
 import os
 import sys
+import functools
 
+@functools.lru_cache() # Set up a cache so the same material doesn't get need to get read twice in a row
 def wb08read(data_path):
     """
     Extracts information on complex index of refraction from provided datasheets for a given material.
@@ -30,22 +31,20 @@ def wb08read(data_path):
     """
     wavew, nw, kw, temp = [], [], [], []
 
-    with open(data_path, 'r') as f:
-        reader = csv.reader(f)
-        next(reader) # Skip header row
-        next(reader) # Skip column header row
-        #line=line.strip(',')
-        #print(line)
-        for line in reader:
-            # Append wavelength, real part n, and imaginary part k
-            wavew.append(float(line[0])) 
-            nw.append(float(line[1]))
-            kw.append(float(line[2]))
+    # Load the entire file containing index of refraction data into memory at once
+    txt = np.loadtxt(data_path, delimiter=',', skiprows=2)
+
+    for line in txt:
+        # Append wavelength, real part n, and imaginary part k
+        wavew.append(float(line[0])) 
+        nw.append(float(line[1]))
+        kw.append(float(line[2]))
 
     # Cast as numpy arrays for easier interpolation later
     wavew=np.array(wavew)
     nw=np.array(nw)
     kw=np.array(kw)
+    
     return wavew,nw,kw
 
 def get_nk(wavels, comps, mixmodel='Molecular'):
@@ -109,8 +108,8 @@ def get_minmax_wavel(comp):
     Reads the same file as get_nk, but searches for min and max wavelength supported.
 
     :param comp: String composition of material
-    :returns: Float minimum wavelength supported
-              Float maximum wavelength supported
+    :returns: Float minimum wavelength supported in microns
+              Float maximum wavelength supported in microns
     """
     idx_refraction_path = os.path.join("../data", comp + "_constants.csv")
     
@@ -147,9 +146,9 @@ def get_data(src, altitude=None):
     Parses header using string search to determine how to format the data.
 
     :param src: String path to data file
-    :param altitude: Float altitude if reading data that depends on it
-    :returns: Array for theta/wavelength values,
-              Array for corresponding reflectance/tau values
+    :param altitude: Float altitude in kilometers if reading data that depends on it
+    :returns: Array for theta/wavelength values in degrees/microns,
+              Array for corresponding reflectance/tau values (unitless)
     """
     # Empty arrays for data
     thetas = []
@@ -197,7 +196,32 @@ def get_data(src, altitude=None):
 
     return thetas, reflectances
 
-def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=vars.ANGLE_LOWERBOUND, theta_max=vars.ANGLE_UPPERBOUND, wavels=[vars.WAVEL], nsize=vars.NSIZE, comps={vars.COMP: 1}, mixmodel='Molecular', tau=None, ref_if=0, section='Semi-Empirical Mie', output='Reflectance'):
+def log_dist(smin, smax, base):
+    """
+    Creates a logarithmically-spaced array of values between smin and smax, with an exponential base
+
+    :param smin: Float minimum particle size in microns, the start size of the array
+    :param smax: Float maximum particle size in microns, the ending max size of the array
+    :param base: Float base to use in exponential spacing
+    :returns: Float array of logarithmically spaced values between smin and smax in microns
+    """
+
+    # First element should be smin
+    sizes = [smin]
+    i = 0
+    while(sizes[-1] < smax):
+        sizes.append(sizes[0] + base**i) # Function will look like smin + base**x
+        i += 1
+
+    # Just in case the last element overshot too much
+    if sizes[-1] > smax:
+        sizes[-1] = smax # We clamp the end to match smax
+    elif sizes[-1] < smax:
+        sizes.append(smax) # Adding smax if the array falls short
+
+    return np.asarray(sizes)
+
+def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=vars.ANGLE_LOWERBOUND, theta_max=vars.ANGLE_UPPERBOUND, wavels=[vars.WAVEL], nsize=vars.NSIZE, comps={vars.COMP: 1}, mixmodel='Molecular', tau=None, ref_if=0, section='Semi-Empirical Mie', output='Reflectance'):
     """
     Computes a 2D array of reflectances given arrays of angles and wavelengths. By default, a semi-empirical Mie
     theory is used based on methods from Pollack & Cuzzi's 'Scattering of Nonspherical Particles of Size Comparable 
@@ -205,31 +229,36 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
     pure Mie theory for small particles and a combination of diffraction, external reflection, and transmission
     theories for large particles.
 
-    :param smin: Float minimum size used in size distribution
-    :param smax: Float maximum size used in size distribution
+    :param smin: Float minimum size in microns used in size distribution
+    :param smax: Float maximum size in microns used in size distribution
     :param powlaw: Float power law used in size distribution
     :param G: Float constant to use in Mie transmission equation
     :param r: Float ratio of the surface area of an irregular particle to the surface area of a sphere of the same 
-              volume
-    :param x0: Float size cutoff above which to use semi-empirical methods and below which to use pure Mie
-    :param theta_min: Integer lower angle bound
-    :param theta_max: Integer upper angle bound
-    :param wavel: Array of wavelengths at which to evaluate Mie
-    :param nsize: Integer number of particle sizes to use (resolution)
+              volume (unitless)
+    :param x0: Float size cutoff above which to use semi-empirical methods and below which to use pure Mie 
+               (unitless)
+    :param theta_min: Integer lower angle bound in degrees
+    :param theta_max: Integer upper angle bound in degrees
+    :param wavel: Array of wavelengths in microns at which to evaluate Mie
+    :param nsize: List [size mode, integer number of sizes to use in size distribution]
     :param comps: Dictionary with keys as mixture materials and values as volume fractions of materials
     :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'  
-    :param tau: Float allowing for optical detph tau to be input, rather than calculated
-    :param ref_if: Float reflectance from original data from which to calculate optical depth tau. ref_if MUST 
-                   correspond to theta_min.
+    :param tau: Float allowing for optical detph tau (unitless) to be input, rather than calculated
+    :param ref_if: Float reflectance from original data (unitless) from which to calculate optical depth tau. 
+                   ref_if MUST correspond to theta_min.
     :param section: String indicating which term of semi-empirical Mie methods to use
     :param output: String indicating what to return ('Reflectance' for reflectances or 'Phase Function' for phase 
                    function)
-    :returns: 2D Array of reflectance values between theta_min, theta_max, and the min and max of wavels. Shape 
-                (len(wavels), len(angles))
-              Array for calculated optical depths at each wavelength
+    :returns: 2D Array of reflectance values (unitless) between theta_min, theta_max, and the min and max of 
+                 wavels. Shape (len(wavels), len(angles))
+              Array for calculated optical depths (unitless) at each wavelength
     """
     # Compute the nominal (unnormalized) particle size distribution
-    radii=np.linspace(smin, smax, nsize)
+    if nsize[0] == 'Linear':
+        radii=np.linspace(smin, smax, nsize[1])
+    elif nsize[0] == 'Logarithmic':
+        radii=log_dist(smin, smax, nsize[1])
+
     diameters=radii*2
     sizedist=radii**(-1*powlaw)
 
@@ -248,7 +277,8 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
     taus = np.zeros((len(wavels)))
 
     # Diffraction term actually doesn't depend on material or index of refraction
-    # We create a placeholder here
+    # We create placeholders here for both phase and intensity
+    SU_large_diff_2d = np.zeros((len(wavels), len(angle_range)))
     P_large_diff_2d = np.zeros((len(wavels), len(angle_range)))
 
     # Iterate through each material
@@ -278,14 +308,14 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
 
             # --- SMALL REGIME PARTICLES ---
             # Default parameters in case there are no small particles
-            SU_small = np.zeros_like(angle_range)
+            SU_small = np.zeros_like(solid_angles)
             P_small = np.zeros_like(angle_range)
             Q_SS = 0
             Q_SA = 0
             if len(small_idxs) > 0:
                 # There is a specific case for which this needs to be optimized, otherwise the code will take eons to run
                 # If only the mie theory is needed and the output is requested in reflectances, there is a shortcut we can take.
-                if section == 'Pure Mie' and output == 'Reflectance':
+                if section == 'Pure Mie' and (output == 'Reflectance' or output == 'Intensity'):
                     # Use PyMieScatt to compute scattering angles and intensities in the small regime
                     # Takes wavelength & diameters in nanometers, so need to convert from microns
                     # Note how this shortcut allows us to calculate the scattering intensity only within the angle range
@@ -293,6 +323,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                     theta1, SL, SR, SU_small = PyMie.SF_SD(m, wavel*1000, small_diameters*1000, small_dist,
                                             minAngle=theta_min, maxAngle=theta_max,
                                             angularResolution=1.0, space='theta')
+                        
                     # Calculate Q coefficients given the data, also applying conversions
                     qdict = PyMie.Mie_SD(m, wavel*1000., small_diameters*1000, small_dist, asDict=True)
 
@@ -310,20 +341,28 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                         # Otherwise, we use a fixed tau for all wavelengths
                         tau_wavel = tau
 
-                    # Calculate reflectance, converting wavelength to nanometers. SU_small is in the
-                    # same units as sizedists, meaning we have square nanometers over cubic microns,
-                    # which is the same as inverse meters. Our units thus cancel assuming tau and 
-                    # reflectances are unitless.
-                    # If this is being curve-fit to data and tau is input as None, this should make
-                    # the output reflectance and input reflectance match at theta=angle_range[0]
-                    refl=np.asarray(SU_small)*(wavel*1000)**2/(4*np.pi)*tau_wavel/bext
+                    if output == 'Intensity':
+                        # Append to relevant arrays
+                        output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * SU_small
+                        taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau_wavel
 
-                    # Append to relevant arrays
-                    output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * refl
-                    taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau_wavel
-                    
-                    # Skip everything else
-                    continue
+                        # Skip everything else
+                        continue
+                    else:
+                        # Calculate reflectance, converting wavelength to nanometers. SU_small is in the
+                        # same units as sizedists, meaning we have square nanometers over cubic microns,
+                        # which is the same as inverse meters. Our units thus cancel assuming tau and 
+                        # reflectances are unitless.
+                        # If this is being curve-fit to data and tau is input as None, this should make
+                        # the output reflectance and input reflectance match at theta=angle_range[0]
+                        refl=np.asarray(SU_small)*(wavel*1000)**2/(4*np.pi)*tau_wavel/bext
+
+                        # Append to relevant arrays
+                        output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * refl
+                        taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau_wavel
+                        
+                        # Skip everything else
+                        continue
 
                 # Use PyMieScatt to compute scattering angles and intensities in the small regime
                 # Takes wavelength & diameters in nanometers, so need to convert from microns
@@ -381,7 +420,8 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                 # --- LARGE REGIME: DIFFRACTION ---
                 # We only compute the diffraction regime for one material
                 if section == 'Semi-Empirical Mie' or section == 'Mie Diffraction':
-                    Q_D = 1 # Diffraction efficiency according to Pollack & Cuzzi
+                    if section == 'Semi-Empirical Mie':
+                        Q_D = 1 # Diffraction efficiency according to Pollack & Cuzzi
                     if i == 0:
                         # Since irregular particles have larger cross-sectional radii than their equivalent volume spheres, must multiply by sqrt(r)
                         rescaled_sizes = large_sizes * np.sqrt(r)
@@ -389,18 +429,25 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                         rescaled_sizedist=(large_diameters/2)**(-1*powlaw)
 
                         # Cast theta and sizes as row/column arrays
-                        theta_2d = solid_angles[:, np.newaxis]
+                        # Theta needs to be split up at pi/4 for later
+                        theta_2d_small = solid_angles[solid_angles < np.pi / 4, np.newaxis]
+                        theta_2d_large = solid_angles[solid_angles >= np.pi / 4, np.newaxis]
+                        theta_2d = np.concatenate((theta_2d_small, theta_2d_large))
                         sizes_2d = rescaled_sizes[np.newaxis, :]
 
                         # Create the z variable for the Bessel function (z = x*sin(theta), Pollack & Cuzzi eqn. 2b)
-                        # z_2d is a 2d array of shape (len(solid_angles), len(rescaled_sizes))
-                        z_2d = sizes_2d * np.sin(theta_2d)
+                        # Note this assumption is only valid when sin(theta) ~ theta, so we add only the part where that assumption is true (theta < pi/4)
+                        z_small = sizes_2d * np.sin(theta_2d_small)
+                        # J.R. Hodkinson and I. Greenleaves (1962) state that at large angles of scatter where theta !~ sin(theta), z=x*theta
+                        z_large = sizes_2d * theta_2d_large
+                        # Stack so that z_2d is a 2d array of shape (len(solid_angles), len(rescaled_sizes))
+                        z_2d = np.vstack((z_small, z_large))
 
                         # Pollack & Cuzzi use a first-order Bessel function in calculating the diffraction
                         # However there is an indeterminate at theta=0, so the L'Hospital's rule limit must be applied
                         with np.errstate(divide='ignore', invalid='ignore'):
                             j1_term = sp.special.j1(z_2d) / z_2d # This makes another 2d array of same shape as z_2d
-                            j1_term[z_2d == 0] = 0.5  # L'Hopital's rule limit
+                            j1_term[z_2d == 0] = 0.5  # L'Hopital's rule limit as stated by Hodkinson and Greenleaves
 
                         # Calculating unnormalized phase function for diffraction as reported in Hodkinson and Greenleaves, 1963
                         # Again, creates a 2d array of same shape as z_2d
@@ -414,10 +461,6 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                         # Integration takes place without normalization constant
                         # We integrate over axis 1, the size axis. Result is a list with shape len(angles)
                         SU_large_diff = np.trapz(integrand_unnormalized, rescaled_sizes, axis=1)
-                        # Bessel function has a periodic spike. Pollack and Cuzzi assume this term drops to 0 in the backscatter region anyways
-                        # So we clamp it here
-                        mask = solid_angles > np.pi / 2
-                        SU_large_diff[mask] = 0
                         
                         # Normalizing so that integral over all solid angles equals 4*pi
                         # We calculate C_D, the normalization constant, by taking the inverse of the integral of the unnormalized phase function
@@ -426,19 +469,23 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                         C_D = 1/(0.5 * np.trapz(SU_large_diff * np.sin(solid_angles), solid_angles))
                         # We now normalize to get the phase function by multiplying by the constant, getting only valid angles
                         P_large_diff_2d[j] = (C_D * np.asarray(SU_large_diff))[solid_min_idx:solid_max_idx+1]
+                        SU_large_diff_2d[j] = SU_large_diff[solid_min_idx:solid_max_idx+1]
 
                 # --- LARGE REGIME: EXTERNAL REFLECTION ---
                 if section == 'Semi-Empirical Mie' or section == 'Mie External Reflection':
                     m_bar_sqr = np.abs(m)**2 # Taking the magnitude of the index of refraction squared
                     # Get the unnormalized phase function for external reflection, which is a function of the solid angle theta
-                    SU_large_extref = 0.5*((np.sin(solid_angles / 2) - (m_bar_sqr - 1 + np.sin(solid_angles / 2)**2)**0.5)/(np.sin(solid_angles / 2) + (m_bar_sqr - 1 + np.sin(solid_angles / 2)**2)**0.5))**2 + 0.5 * ((m_bar_sqr * np.sin(solid_angles / 2) - (m_bar_sqr - 1 + np.sin(solid_angles / 2)**2)**0.5)/(m_bar_sqr * np.sin(solid_angles / 2) + (m_bar_sqr - 1 + np.sin(solid_angles / 2)**2)**0.5))**2
-                
+                    nan_idxs = (m_bar_sqr - 1 + np.sin(solid_angles / 2)**2) < 0
+                    SU_large_extref[nan_idxs] = 1 # Clamp the m_bar_sqr - 1 + np.sin(solid_angles / 2)**2 to 0 to avoid negative square root. This yields an intensity of 1 (see Ellison & Peetz, 1959, section 3)
+                    SU_large_extref[~nan_idxs] = 0.5*((np.sin(solid_angles[~nan_idxs] / 2) - (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5)/(np.sin(solid_angles[~nan_idxs] / 2) + (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5))**2 + 0.5 * ((m_bar_sqr * np.sin(solid_angles[~nan_idxs] / 2) - (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5)/(m_bar_sqr * np.sin(solid_angles[~nan_idxs] / 2) + (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5))**2
+
                     # Calculating the normalization constant, same process as diffraction
                     C_R = 1/(0.5 * np.trapz(SU_large_extref * np.sin(solid_angles), solid_angles))
                     # We now normalize the phase function by multiplying by the constant, getting it between valid angles
                     P_large_extref = (C_R * np.asarray(SU_large_extref))[solid_min_idx:solid_max_idx+1]
-
-                    Q_R = 1 / C_R # External reflection efficiency according to Pollack & Cuzzi, eq. 4
+                    
+                    if section == 'Semi-Empirical Mie':
+                        Q_R = 1 / C_R # External reflection efficiency according to Pollack & Cuzzi, eq. 4
 
                 # --- LARGE REGIME: TRANSMISSION ---
                 if section == 'Semi-Empirical Mie' or section == 'Mie Transmission':
@@ -451,7 +498,12 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
                     # We now normalize the phase function by multiplying by the constant, getting it between valid angles
                     P_large_trans = (C_T * np.asarray(SU_large_trans))[solid_min_idx:solid_max_idx+1]
 
-                    Q_T = Q_LS - Q_D - Q_R # Transmission efficiency according to Pollack & Cuzzi eq. 6a
+                    if section == 'Semi-Empirical Mie':
+                        # We need to handle the case where Q_LS - Q_D - Q_R would produce a negative Q_T, i.e. when Q_LS is too small and Q_R is too big for Q_D to be 1
+                        #if Q_LS < Q_D + Q_R:
+                        #    Q_D = max(0, Q_LS - Q_R) # We assume Q_D is an approximation that may not work at 1, so we recalculate if needed
+                        # If Q_D had to be recalculated, this should result in Q_T = 0
+                        Q_T = Q_LS - Q_D - Q_R # Transmission efficiency according to Pollack & Cuzzi eq. 6a
 
             # Check to see if output requires that one term take up the entire phase function
             if section == 'Mie Diffraction':
@@ -463,7 +515,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
 
             # Total efficiencies between both regimes, weighted by ratio of large to small particles
             Q_star_S = Q_LS * F * r + Q_SS * (1 - F) # Total scattering efficiency, P&C eq. 7a
-            Q_star_A = Q_LA * F + Q_SA * (1 - F) # Total absorption efficiency, P&C eq. 7b
+            Q_star_A = (Q_LA * F) * (r if 2*n*np.mean(large_sizes) > 1 else 1) + Q_SA * (1 - F) # Total absorption efficiency, P&C eq. 7b. They mention a case where the first term needs to be multiplied by r if 2nx>1. I take that to mean average large x.
             Q_star_E = Q_star_S + Q_star_A # Total extinction efficiency, P&C eq. 7c
 
             # Compute the combined phase function, P&C eq. 8. Note we cancel out Q_LS, avoiding 0/0 errors if Q_LS = 0
@@ -471,6 +523,9 @@ def angle_mie_reflectances(smin, smax, powlaw, r=0, G=1, x0=np.inf, theta_min=va
             # Now check the output and calculate phase or reflectance if requested
             if output == 'Phase Function':
                 output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * P_star
+
+            elif output == 'Intensity':
+                output_arr[j] = np.asarray(SU_small)[solid_min_idx:solid_max_idx+1] * (1 - F) * Q_SS / Q_star_S + r * F / Q_star_S * (SU_large_diff_2d[j] * Q_D + np.asarray(SU_large_extref)[solid_min_idx:solid_max_idx+1] * Q_R + np.asarray(SU_large_trans)[solid_min_idx:solid_max_idx+1] * Q_T)
  
             elif output == 'Reflectance':
                 omega_0 = Q_star_S / Q_star_E
@@ -496,7 +551,7 @@ def henyey_greenstein(angle, gweights):
     Computes probability density of light scattering at a given angle using a two-term Henyey-Greenstein function
     with provided weights g (asymmetry parameter) and w (unnormalized term weight)
 
-    :param angle: Integer angle IN RADIANS at which to calculate probability density
+    :param angle: Integer angle in radians at which to calculate probability density
     :param gweights: Array of [g, w] parameters for each term. Shape (2, 2)
     :returns: Float unnormalized probability density of light scattering at the given angle
     """
@@ -509,136 +564,30 @@ def henyey_greenstein(angle, gweights):
         hg_term += w/(4*np.pi)*(1-g**2)/(1+g**2-2*g*np.cos(angle))**1.5
     return hg_term
 
-def output_graph(graphmode, sensor, comps, mixmodel, datamodel, fitmodel, param, tau, nsizes=pvars.NSIZE, wavelbounds=(0, np.inf), output=['Phase Angle', 'Reflectance']):
-    """
-    A function that takes input scattering data as might be observed by one of Europa Clipper's instruments,
-    as well as additional data about the fit and the plot type desired, and outputs the corresponding x and y
-    arrays for a plot.
-
-    :param graphmode: Integer, indicates whether to output reflectance vs. wavelength (0), surface reflectance
-                     vs. wavelength (1), or reflectance vs. scattering angle (2)
-    :param sensor: String sensor from which to read wavelength range
-    :param comps: Dictionary with keys as materials and values as volume fractions of materials
-    :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'
-    :param datamodel: Array of size distribution strings [min particle size, max particle size, power law,
-                      r, G, x0]
-    :param fitmodel: String for scattering theory to use, either 'Semi-Empirical Mie', 'Pure Mie',
-                     'Mie Scattering', 'Mie External Reflection', or 'Mie Transmission'.
-    :param param: Fixed parameter to base reflectances on. Int scattering angle if graphmode = 0, float effective
-                  grain size if graphmode = 1, float wavelength if graphmode = 2
-    :param tau: Float optical depth
-    :param nsizes: Int number of sizes to use in sizedistribution, for models that use them
-    :param wavelbounds: Tuple (float, float) wavelength bounds as established by the composition, representing
-                        data available for index of refraction interpolation
-    :param output: List of strings indicating the type of output to return. First element is x axis, either
-                   'Phase Angle', 'Scattering Angle', or 'Wavelength'. Second element is y axis, either 
-                   'Reflectance' or 'Phase Function'.
-    :returns: List containing x data values
-              List containing float reflectance/albedo/phase function data values
-    """
-
-    # Try to extract r, G, and tau from the datamodel array; if they are NaNs, set them to their default values
-    if datamodel[3] == 'NaN':
-        r = 0
-    else:
-        r = float(datamodel[3])
-
-    if datamodel[4] == 'NaN':
-        G = 1
-    else:
-        G = float(datamodel[4])
-
-    if tau == 'NaN':
-        tau = 0
-    else:
-        tau = float(tau)
-    
-    if fitmodel == 'Semi-Empirical Mie':
-        x0 = float(datamodel[5])
-    elif fitmodel == 'Pure Mie':
-        x0 = np.inf # Pure Mie treats all particles as small, using Mie theory for perfect spheres
-    else:
-        x0 = 0 # All other components of Mie treat all particles as large to use only the selected components
-
-    # nsizes also needs to be checked for nans as it only applies to semi-empirical Mie, pure Mie, and Mie scattering
-    if nsizes == 'NaN':
-        nsizes = pvars.NSIZE # It won't be used anyway
-    else:
-        nsizes = int(nsizes) # Number of sizes will always be an integer
-
-    # If surface reflectance mode, create an array of wavelengths and calculate reflectances using surface formulas
-    if graphmode == 1:
-        wavel_range = pvars.INSTRUMENTS[sensor] # Get range of all available wavelengths in the sensor
-        xarr = np.arange(round(max(wavelbounds[0], wavel_range[0]), 5), round(min(wavelbounds[1], wavel_range[1]), 5) + 1e-20, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
-        reflectances = fresn_surface_reflectances(xarr, param, comps=comps, mixmodel=mixmodel)
-    # If reflectance vs. angle mode, create an array of all colatitude angles and call the semi-empirical Mie theory
-    elif graphmode == 2:
-        xarr = np.arange(0, 181, 1) if output[0] == 'Scattering Angle' else np.arange(180, -1, -1) # Declare array of angles 0 to 180 degrees (or 180 to 0 degrees if phase)
-        # Get reflectances. Programmed so that angles start, stop, and step the same way as xarr
-        reflectances = angle_mie_reflectances(float(datamodel[0]), float(datamodel[1]), float(datamodel[2]), r=r, G=G, x0=x0, theta_min=0, theta_max=180, wavels=[param], comps=comps, mixmodel=mixmodel, nsize=nsizes, tau=tau, section=fitmodel, output=output[1])[0][0]
-
-        # For Henyey-Greenstein, curve fitting is needed to determine global scale factor
-        if fitmodel == 'Henyey-Greenstein':
-            # Iterate through given size distributions and see if input size distribution matches.
-            # If so, get the HG parameters for that size distribution
-            init_hg_params = []
-            for model in pvars.SIZEDISTS.values():
-                if datamodel == model[0]:
-                    init_hg_params = model[1]
-                    break
-            
-            # Define a function to use in curve-fitting HG function to match Mie via scale factor
-            def hg_iterator(angles, scale_factor):
-                hg_ifs = henyey_greenstein(xarr, [[init_hg_params[1], init_hg_params[0] * scale_factor], [init_hg_params[3], init_hg_params[2] * scale_factor]])
-                return np.log10(hg_ifs) # Will be fit on a log scale
-
-            # Try to best-fit the Henyey-Greenstein function to the Mie function via a scale factor
-            try:
-                popt, _ = sp.optimize.curve_fit(
-                    hg_iterator, 
-                    xarr, 
-                    np.log10(reflectances), # Log of original dataset is being fit with log of best-fit dataset
-                    p0=[1e-6], # Standard scale for HG weights
-                    maxfev=10000,
-                )
-                factor = popt.tolist()[0]
-            except Exception as e:
-                print(f"Curve fitting failed: {e}")
-                factor = 1e-6
-
-            # Final Henyey-Greenstein reflectances
-            reflectances = henyey_greenstein(np.radians(xarr), [[init_hg_params[1], init_hg_params[0] * factor], [init_hg_params[3], init_hg_params[2] * factor]])
-    # If reflectances vs. wavelengths mode, get the wavelength range from the sensor and use that in the semi-empirical Mie methods
-    elif graphmode == 0:
-        wavel_range = pvars.INSTRUMENTS[sensor] # Plot over range of all available wavelengths in the sensor
-        xarr = np.arange(round(max(wavelbounds[0], wavel_range[0]), 5), round(min(wavelbounds[1], wavel_range[1]), 5) + 1e-20, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
-        reflectances = angle_mie_reflectances(float(datamodel[0]), float(datamodel[1]), float(datamodel[2]), r=r, G=G, x0=x0, theta_min=param, theta_max=param, wavels=xarr, comps=comps, mixmodel=mixmodel, nsize=nsizes, tau=tau, section=fitmodel, output=output[1])[0]
-        # angle_mie_reflectances returns a weird column array here, with shape [[element1], [element2], [element3]]
-        # Need to make array not as deep
-        reflectances = [element[0] for element in reflectances]
-
-    return xarr.tolist(), reflectances # xarr should not be a numpy array because PyQt6 doesn't know what numpy is for some reason
-
 def fresn_surface_reflectances(wavels, param, comps={vars.COMP, 1}, mixmodel='Molecular'):
     """
     Compute the surface albedo of a material over various wavelengths from Fresnel reflectances.
 
-    :param wavels: List of float wavelengths at which to evaluate
+    :param wavels: List of float wavelengths at which to evaluate in microns
     :param comps: Dictionary with keys as materials and values as their respective v/v fractions
-    :param param: Float effective grain size (average particle radius)
+    :param param: Float effective grain size (average particle radius, microns)
     :param mixmodel: String, either 'Molecular' (averaging optical constants) or 'Areal' (averaging reflectances)
     :returns: List of reflectances evaluated. Shape len(wavels)
     """
     # Figure out whether to iterate over all materials and sum weighted reflectances (areal model)
     # or all at once and get the averaged index of refraction (molecular model)
     comp_names = comps.keys() if mixmodel == 'Areal' else range(1)
-    reflectances = np.zeros_like(wavels)
+    reflectances = np.zeros_like(wavels, dtype=float)
+
+    # Convert effective grain size & wavelengths to meters for calculations
+    s_meters = param * 1e-6
+    wavels_meters = (np.asarray(wavels) * 1e-6).tolist()
 
     # Loop over all materials and average reflectance if areal
     # Otherwise, evaluate all at once and average optical constants
     for mat_idx in comp_names:
         n, k = get_nk(wavels, ({mat_idx: comps[mat_idx]} if mixmodel == 'Areal' else comps), mixmodel=mixmodel)
-        reflectances += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * surface_albedo(wavels, n, k, param)
+        reflectances += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * surface_albedo(wavels_meters, n, k, s_meters)
 
     return reflectances
 
@@ -647,11 +596,11 @@ def surface_albedo(wave,n,k,s):
     Calculates albedo from Fresnel reflectances for a given range of wavelengths and optical constants n and k 
     with effective grain size s.
 
-    :param wave: List of float wavelengths at which to evaluate
+    :param wave: List of float wavelengths at which to evaluate, in meters
     :param n: Float index of refraction of material
     :param k: Float index of absorption of material
-    :param s: Float effective grain size
-    :returns: List of reflectances (albedos) evaluated. Shape len(wave)
+    :param s: Float effective grain size, in meters
+    :returns: List of unitless reflectances (albedos) evaluated. Shape len(wave)
     """
     nnx=np.size(wave)
     theta1=np.linspace(0,np.pi/4,100)
@@ -777,8 +726,8 @@ def mkplt(folder, theta, if_orig, if_fit, params, use_mie):
 
     :param folder: String folder in which to save graph
     :param theta: Array of thetas in degrees, to be plotted along the x-axis
-    :param if_orig: Array of original reflectances, interpolated to thetas
-    :param if_fit: Array of reflectances from line of best fit
+    :param if_orig: Array of original reflectances (unitless), interpolated to thetas
+    :param if_fit: Array of reflectances (unitless) from line of best fit
     :param params: Array of parameters required to produce given fit. Shape varies based on model used.
     :param use_mie: Boolean for determining whether Mie or Henyey-Greenstein methods were used.
     """
@@ -818,9 +767,9 @@ def wavel_plot(folder, wavels, params, angle=vars.WAVEL_SNAPSHOT_ANGLE):
     this graph will only be generated if Mie theory is used.
 
     :param folder: String folder in which to save graph
-    :param wavels: Array of wavelengths at which to extract reflectance data
+    :param wavels: Array of wavelengths in microns at which to extract reflectance data
     :param params: Array of particle distribution parameters calculated from Mie theory.
-    :param angle: Integer scattering angle at which to loop over wavelengths
+    :param angle: Integer scattering angle in degrees at which to loop over wavelengths
     """
     reflectances = []
     # Iterate through all given wavelengths to get a reflectance at the given angle, pass existing tau
@@ -857,8 +806,8 @@ def plt_angle(fig_path, theta, mie_ifs, hg_ifs, params, hg_params):
 
     :param fig_path: String path to which to save graph, including image name
     :param theta: Array of thetas in degrees, to be plotted along the x-axis
-    :param mie_ifs: Array of reflectances computed from Mie theory
-    :param hg_ifs: Array of reflectances computed from Henyey-Greenstein function
+    :param mie_ifs: Array of reflectances (unitless) computed from Mie theory
+    :param hg_ifs: Array of reflectances (unitless) computed from Henyey-Greenstein function
     :param params: Array of Mie and miscellaneous parameters used to produce given plot
     :param hg_params: Array of Henyey-Greenstein parameters used to produce given plot
     """
@@ -893,10 +842,11 @@ def plt_wavel(fig_path, wavels, angles, plt_angles, reflectances, params):
     this graph will only be generated if Mie theory is used.
 
     :param fig_path: String path to which to save graph, including image name
-    :param wavels: Array of wavelengths comprising row-axis of reflectances
-    :param angles: Array of angles comprising column-axis of reflectances
-    :param plt_angles: Array of angles (degrees) for which to produce graphs
-    :param reflectances: 2D Numpy array of reflectances at different angles and wavelengths. Shape (len(wavels), len(angles))
+    :param wavels: Array of wavelengths in microns comprising row-axis of reflectances
+    :param angles: Array of angles in degrees comprising column-axis of reflectances
+    :param plt_angles: Array of angles in degrees for which to produce graphs
+    :param reflectances: 2D Numpy array of reflectances (unitless) at different angles and wavelengths. Shape 
+                         (len(wavels), len(angles))
     :param params: Array of particle distribution parameters calculated from Mie theory.
     """
 
@@ -929,9 +879,9 @@ def angle_wavel_csv(file_path, wavels, angles, reflectances):
     being wavelengths and columns being reflectances.
 
     :param file_path: String path to which to save csv
-    :param wavels: Row-axis float array for data
-    :param angles: Column-axis integer array for data, in degrees
-    :param reflectances: 2D Numpy array containing reflectance data. Shape (len(wavels), len(angles))
+    :param wavels: Row-axis float array for data in microns
+    :param angles: Column-axis integer array for data in degrees
+    :param reflectances: 2D Numpy array containing unitless reflectance data. Shape (len(wavels), len(angles))
     """
 
     # Open the csv writer

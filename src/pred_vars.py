@@ -19,4 +19,6 @@ INSTRUMENTS = {'NAC': [0.358, 1.050], 'WAC': [0.370, 1.050], 'MISE': [0.8, 5], '
 SIZEDISTS = {'G-ring-like': [[2.2014, 6.5507, 2.8845, 1.8447, 3.2029, 2.3964], [0.46, 0.98, 0.54, 0.34]], 'E-ring-like': [[1, 9.6305, 4, 1, 8.1364, 5.6558], [0.91, 0.87, 0.09, 0.10]], 'PC Cubes Fig 3': [[1.51197195937, 14.1647899352, 2.5, 1.3, 1.5, 4], [0, 0, 0, 0]], 'PC Octahedrons Fig 6': [[4.67119757975, 7.24154991068, 2.5, 1.1, 2, 8], [0, 0, 0, 0]], 'PC Concave-Convex Fig 7': [[4.69507082121, 14.1647899352, 2.5, 1.3, 4, 10], [0, 0, 0, 0]], 'Simplified Case': [[8, 12, 4, 1.3, 1.5, 4]]}
 
 # Other distribution parameters
-NSIZE=51 # Number of sizes to include in Mie distribution (resolution)
+NSIZE=['Linear', 51] # Number of sizes to include in Mie distribution (resolution)
+# Another option is to use 'Logarithmic', which allows you to specify a base (second parameter)
+# Will count up sizes exponentially (e.g. 2 would give 1, 2, 4, 8, 16, 32, up to max size)
