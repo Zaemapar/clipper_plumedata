@@ -4,8 +4,8 @@ Greenstein function for a given dataset of reflectance vs. scattering angle, out
 all optimized fit parameters and a graph of the best-fit curve superimposed on the original
 dataset.
 
-Author: Parker A. Zaemann
-Date: 06 Jul 2026
+Authors: Parker A. Zaemann, Matthew M. Hedman
+Date: 17 Jul 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """

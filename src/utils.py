@@ -2,8 +2,8 @@
 A file containing various helper methods to organize and read files, perform major computations relating to
 scattering theories, or output graphs given an input dataset.
 
-Author: Parker A. Zaemann
-Date: 06 Jul 2026
+Authors: Parker A. Zaemann, Matthew M. Hedman
+Date: 17 Jul 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """

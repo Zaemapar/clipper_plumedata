@@ -2,8 +2,8 @@
 A helper file containing all data relating to Clipper's instruments and the named size distributions available for
 selection in the GUI.
 
-Author: Parker A. Zaemann
-Date: 09 Jul 2026
+Authors: Parker A. Zaemann, Matthew M. Hedman
+Date: 17 Jul 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """

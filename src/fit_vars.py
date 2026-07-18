@@ -2,8 +2,8 @@
 A helper file containing all data necessary to compute the best-fit Mie distribution or
 Henyey-Greenstein function for a given dataset.
 
-Author: Parker A. Zaemann
-Date: 06 Jul 2026
+Authors: Parker A. Zaemann, Matthew M. Hedman
+Date: 17 Jul 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """

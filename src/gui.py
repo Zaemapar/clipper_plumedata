@@ -4,8 +4,8 @@ input size distribution, instrument wavelength range, optical depth, and materia
 creates plots for each combination of parameters, allowing for multiple plots on the same window and switching 
 between plotting reflectance vs. wavelength, surface albedo vs. wavelength, and reflectance vs. scattering angle.
 
-Author: Parker A. Zaemann
-Date: 09 July 2026
+Authors: Parker A. Zaemann, Matthew M. Hedman
+Date: 17 July 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """

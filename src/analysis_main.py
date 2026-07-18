@@ -3,8 +3,8 @@ A script to run the gui.py application, which contains a graphical user interfac
 parameters related to particle scattering and watch the graph update in real time. This script should be run in the
 terminal to launch the GUI.
 
-Author: Parker A. Zaemann
-Date: 07 Jul 2026
+Authors: Parker A. Zaemann, Matthew M. Hedman
+Date: 17 Jul 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """
