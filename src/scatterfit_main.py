@@ -148,7 +148,7 @@ if __name__ == "__main__":
             params = p0 # Fall back on the original point if failed
 
         # Retrieve the tau corresponding to the fitted parameters (matching the dataset's first reflectance and the fit's first reflectance)
-        optimal_tau = utils.angle_mie_reflectances(params[0], params[1], params[2], r=params[3], G=params[4], x0=params[5], ref_if=reflectance_ref)[1][0][0]
+        optimal_tau = utils.angle_mie_reflectances(params[0], params[1], params[2], r=params[3], G=params[4], x0=params[5], ref_if=reflectance_ref)[1][0]
         params.append(optimal_tau) # append to parameter list
 
         # Then get the full line across all angles

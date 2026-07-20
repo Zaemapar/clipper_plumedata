@@ -86,13 +86,17 @@ def output_graph(graphmode, sensor, comps, mixmodel, datamodel, fitmodel, param,
     # If surface reflectance mode, create an array of wavelengths and calculate reflectances using surface formulas
     if graphmode == 1:
         wavel_range = vars.INSTRUMENTS[sensor] # Get range of all available wavelengths in the sensor
-        xarr = np.arange(round(max(wavelbounds[0], wavel_range[0]), 5), round(min(wavelbounds[1], wavel_range[1]), 5) + 1e-20, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
-        reflectances = utils.fresn_surface_reflectances(xarr, param, comps=comps, mixmodel=mixmodel)
+        min_bound = round(max(wavelbounds[0], wavel_range[0]), 5) # Round most limiting wavelength bounds to 5 decimals to clamp floating-point precision loss
+        max_bound = round(min(wavelbounds[1], wavel_range[1]), 5)
+        xarr = np.arange(min_bound, max_bound + 1e-10, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
+        if xarr[-1] > max_bound:
+            xarr = xarr[:len(xarr) - 1] # Clamp the last element if it goes out of bounds
+        reflectances = utils.fresn_surface_reflectances(xarr, param, comps=comps, mixmodel=mixmodel, updates=[True, result_queue])
     # If reflectance vs. angle mode, create an array of all colatitude angles and call the semi-empirical Mie theory
     elif graphmode == 2:
         xarr = np.arange(0, 181, 1) if output[0] == 'Scattering Angle' else np.arange(180, -1, -1) # Declare array of angles 0 to 180 degrees (or 180 to 0 degrees if phase)
         # Get reflectances. Programmed so that angles start, stop, and step the same way as xarr
-        reflectances = utils.angle_mie_reflectances(float(datamodel[0]), float(datamodel[1]), float(datamodel[2]), r=r, G=G, x0=x0, theta_min=0, theta_max=180, wavels=[param], comps=comps, mixmodel=mixmodel, nsize=nsizes, tau=tau, section=fitmodel, output=output[1])[0][0]
+        reflectances = utils.angle_mie_reflectances(float(datamodel[0]), float(datamodel[1]), float(datamodel[2]), r=r, G=G, x0=x0, theta_min=0, theta_max=180, wavels=[param], comps=comps, mixmodel=mixmodel, nsize=nsizes, tau=tau, section=fitmodel, output=output[1], updates=[True, result_queue])[0][0]
 
         # For Henyey-Greenstein, curve fitting is needed to determine global scale factor
         if fitmodel == 'Henyey-Greenstein':
@@ -128,11 +132,22 @@ def output_graph(graphmode, sensor, comps, mixmodel, datamodel, fitmodel, param,
     # If reflectances vs. wavelengths mode, get the wavelength range from the sensor and use that in the semi-empirical Mie methods
     elif graphmode == 0:
         wavel_range = vars.INSTRUMENTS[sensor] # Plot over range of all available wavelengths in the sensor
-        xarr = np.arange(round(max(wavelbounds[0], wavel_range[0]), 5), round(min(wavelbounds[1], wavel_range[1]), 5) + 1e-20, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
-        reflectances = utils.angle_mie_reflectances(float(datamodel[0]), float(datamodel[1]), float(datamodel[2]), r=r, G=G, x0=x0, theta_min=param, theta_max=param, wavels=xarr, comps=comps, mixmodel=mixmodel, nsize=nsizes, tau=tau, section=fitmodel, output=output[1])[0]
+        min_bound = float(round(max(wavelbounds[0], wavel_range[0]), 5)) # Round most limiting wavelength bounds to 5 decimals to clamp floating-point precision loss
+        max_bound = float(round(min(wavelbounds[1], wavel_range[1]), 5))
+        xarr = np.arange(min_bound, max_bound + 0.01, 0.01) # Assume a 10 nm resolution. Get the most limiting bounds
+        if xarr[-1] > max_bound:
+            xarr[-1] = max_bound # Clamp the last element if it goes out of bounds
+        reflectances = utils.angle_mie_reflectances(float(datamodel[0]), float(datamodel[1]), float(datamodel[2]), r=r, G=G, x0=x0, theta_min=param, theta_max=param, wavels=xarr, comps=comps, mixmodel=mixmodel, nsize=nsizes, tau=tau, section=fitmodel, output=output[1], updates=[True, result_queue])[0]
         # angle_mie_reflectances returns a weird column array here, with shape [[element1], [element2], [element3]]
         # Need to make array not as deep
         reflectances = [element[0] for element in reflectances]
+
+    # Drain any remaining progress items in the queue
+    try:
+        while not result_queue.empty():
+            item = result_queue.get_nowait()
+    except Exception:
+        pass # The queue is already probably empty
 
     # Return final arrays by putting them in queue
     result_queue.put({
@@ -276,6 +291,12 @@ class MainWindow(qt.QMainWindow):
         self.load_label.setStyleSheet("color: red;")
         # The load label will handle errors, as such it needs to wrap since it can get pretty long
         self.load_label.setWordWrap(True)
+
+        # Setting up a progress bar. Won't always be visible, but for long computations, it is handy
+        self.prog = qt.QProgressBar(self)
+        self.prog.setGeometry(0, 0, 300, 25)
+        self.prog.setMaximum(100) # Set maximum value
+        self.prog.setVisible(False) # Won't be shown by default
 
         # Setting up the graph window
         self.multiple = False # Multiple will be used to indicate if multiple datasets are in the same graph.
@@ -531,7 +552,8 @@ class MainWindow(qt.QMainWindow):
         self.layout.addWidget(self.y_scale_label, 15, 0, 1, 1)
         self.layout.addWidget(self.y_linear, 15, 1, 1, 1)
         self.layout.addWidget(self.y_log, 15, 2, 1, 1)
-        self.layout.addWidget(self.load_label, 16, 0, 2, 2)
+        self.layout.addWidget(self.load_label, 16, 0, 1, 1)
+        self.layout.addWidget(self.prog, 16, 1, 1, 2)
 
         # Add the two screens to the stack
         self.stack.addWidget(self.data_input_widget)
@@ -546,8 +568,8 @@ class MainWindow(qt.QMainWindow):
 
         # Create a timer for when we check if the subprocess is done later
         self.monitor_timer = qc.QTimer()
-        self.monitor_timer.setInterval(100) # Update ever 100 ms
-        self.monitor_timer.timeout.connect(self.finish_process)
+        self.monitor_timer.setInterval(10) # Update time in milliseconds
+        self.monitor_timer.timeout.connect(self.update_process)
 
         # There are default settings in the input boxes, so output the first graph
         self.change_input() # First update the placeholder texts
@@ -561,7 +583,7 @@ class MainWindow(qt.QMainWindow):
 
         :param self: MainWindow object
         """
-        self.clear_graph() # Clear graph first
+        self.clear_graph() # Clear graph first. This will stop any pending updates.
 
         # First ensure all missing widgets are displayed upon a mode change. This is only relevant from mode 1 to mode 2
         if self.graphmode == 1:
@@ -843,7 +865,7 @@ class MainWindow(qt.QMainWindow):
         compositions = {} # This will be used to update the graph/legend
         if "Volume fractions" not in err_message: # Only compute if no comp errors were detected
             for i, item in enumerate(self.comps):
-                if not float(item[1].text()) == 0: # Compositions with v/v equal to zero don't count in legend updates
+                if float(item[1].text()) != 0: # Compositions with v/v equal to zero don't count in legend updates
                     compositions[item[0].currentText()] = item[1].text()
 
             # Composition changes require getting which wavelengths are supported for that material
@@ -1018,15 +1040,7 @@ class MainWindow(qt.QMainWindow):
 
         :param self: MainWindow object
         """
-        # Stop timer if running
-        self.monitor_timer.stop()
-        # Check to ensure a process isn't already running, and if it is, kill it
-        if self.proc is not None:
-            self.load_label.setText("Cancelling...")
-            qt.QApplication.processEvents() # Force a screen update to render the status label
-            self.proc.terminate() # Send the SIGTERM signal to the process
-            self.proc.join()
-            self.proc = None
+        self.kill_process() # Stop any current updates
 
         # Track all changes in the current dataset. Here updated_params is likely not going to be different than
         # the last row of self.base_params if the dataset has already been plotted, which it must be for this
@@ -1082,15 +1096,7 @@ class MainWindow(qt.QMainWindow):
 
         :param self: MainWindow object
         """
-        # Stop timer if running
-        self.monitor_timer.stop()
-        # Check to ensure a process isn't already running, and if it is, kill it
-        if self.proc is not None:
-            self.load_label.setText("Cancelling...")
-            qt.QApplication.processEvents() # Force a screen update to render the status label
-            self.proc.terminate() # Send the SIGTERM signal to the process
-            self.proc.join()
-            self.proc = None
+        self.kill_process() # Stop any current updates
 
         self.multiple = False # No graphs means no multiple
         self.param_str = '' # Reset input box
@@ -1168,7 +1174,7 @@ class MainWindow(qt.QMainWindow):
         file_path, _ = qt.QFileDialog.getSaveFileName(
             self, 
             "Save Plot As", 
-            "", 
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), # We will default the file to the PARENT directory, not gui.py's directory
             "PNG Files (*.png);;All Files (*)"
         )
 
@@ -1193,7 +1199,7 @@ class MainWindow(qt.QMainWindow):
             self.all_borders('black') # Reset all input boxes to black border
             
             # Confirm whether file saved successfully & set load label to display that
-            if os.path.exists(file_path):
+            if os.path.exists(file_path + '.png') and os.path.exists(file_path + '_params.csv'):
                 self.load_label.setText(f"Graph saved to {file_path}.png. Parameters saved to {file_path}_params.csv.")
             else:
                 self.load_label.setText(f"File failed to save.")
@@ -1330,7 +1336,7 @@ class MainWindow(qt.QMainWindow):
             try:
                 # update_materials will check the majority of problematic material entries
                 # This is just a last line of defense
-                if not len(value) == 0 and not float(value) == 0:
+                if len(value) != 0 and float(value) != 0:
                     compositions[key] = value
             except ValueError: # In case of any error, skip the material
                 continue
@@ -1399,7 +1405,7 @@ class MainWindow(qt.QMainWindow):
         # Check where the new parameters do not match the base ones
         update_idxs = []
         for i, element in enumerate(updated_params):
-            if not element == self.base_params[0][i]:
+            if element != self.base_params[0][i]:
                 update_idxs.append(i)
 
         # Search all but the last part of base_params (which could match updated_params)
@@ -1531,7 +1537,7 @@ class MainWindow(qt.QMainWindow):
         caption = {} # Create an empty dictionary to hold constants
         for idx in unchanged_idxs:
             item = self.base_params[0][idx] # The first entry in base_params will suffice for constant parameters
-            if not (item == 'NaN' or item == 'None'): # Ensure no NaNs/irrelevant parameters get added
+            if item != 'NaN' and item != 'None': # Ensure no NaNs/irrelevant parameters get added
                 if idx == 0:
                     caption['Instrument'] = item
                 elif idx == 1:
@@ -1671,7 +1677,7 @@ class MainWindow(qt.QMainWindow):
             fraction_sum = 1
 
         # If there are too many empty fields and the fractions don't add to 1, add this error
-        if not fraction_sum == 1:
+        if fraction_sum != 1:
             err_string += 'Volume fractions must add to 1.'
 
         if len(err_string) > 0:
@@ -2036,7 +2042,7 @@ class MainWindow(qt.QMainWindow):
         if self.y_axis.currentText() == 'Reflectance':
             self.graph_widget.setLabel('left', 'Reflectance', units='I/F', color='k') # Units are I/F
             # Henyey-Greenstein gets added because Reflectance supports it
-            if not self.graphmode == 0 and self.fit_model.findText("Henyey-Greenstein") < 0:
+            if self.graphmode != 0 and self.fit_model.findText("Henyey-Greenstein") < 0:
                 self.fit_model.addItems(["Henyey-Greenstein"]) # Not possible to have multiple, since text has to change to trigger this
             # Show tau again because reflectance depends on it
             if self.tau_label.isHidden():
@@ -2127,6 +2133,8 @@ class MainWindow(qt.QMainWindow):
         if self.stack.currentIndex() == 0:
             # Add the load label in its proper place
             self.layout.addWidget(self.load_label, self.row_widget(self.y_scale_label) + 1, 0, 1, 3)
+            # Add the progress bar in its proper place
+            self.layout.addWidget(self.prog, self.row_widget(self.y_scale_label) + 1, 1, 1, 2)
             # We add in the graph widgets no matter screen which is being used
             self.layout.addWidget(self.graph_widget, 0, 3, 24, 24)
             self.layout.addWidget(self.home_button, 1, 4, 1, 1)
@@ -2141,6 +2149,8 @@ class MainWindow(qt.QMainWindow):
         elif self.stack.currentIndex() == 1:
             # Add the load label in its proper place
             self.settings_layout.addWidget(self.load_label, 3, 0, 1, 3)
+            # Add the progress bar in its proper place
+            self.settings_layout.addWidget(self.prog, 3, 1, 1, 2)
             # We add in the graph widgets no matter screen which is being used
             self.settings_layout.addWidget(self.graph_widget, 0, 3, 24, 24)
             self.settings_layout.addWidget(self.home_button, 1, 4, 1, 1)
@@ -2204,19 +2214,32 @@ class MainWindow(qt.QMainWindow):
             if item and item.widget():
                 item.widget().setEnabled(enable)
 
-    def finish_process(self):
-        if self.proc is None or not self.proc.is_alive():
-            # If the process is no longer alive, signal it has ended
+    def update_process(self):
+        """
+        A function to update the progress bar if the graph is updating and not finished. When it is 
+        finished, it plots the new dataset found in the queue.
+        
+        :param self: MainWindow object
+        """
+        try:
+            value = result_queue.get_nowait() # Get whatever is in the result queue at this moment
+        except Exception:
+            value = None # If the queue is empty
+        if isinstance(value, float): # A float is returned, that is a progress update
+            # Show progress bar if in the process of updating
+            if self.prog.isHidden():
+                self.prog.setVisible(True)
+            self.prog.setValue(int(value*100)) # Output result to progress bar as a percentage
+        elif isinstance(value, dict): # A dictionary has been returned, time to update graph
             self.monitor_timer.stop() # Stop the timer if process is not running
             if self.proc:
                 self.proc.join()
                 self.proc = None
 
             # Grab results from the queue
-            if not result_queue.empty():
-                results = result_queue.get()
-                self.x_data = results["x_data"]
-                self.y_data = results["y_data"]
+            if value is not None:
+                self.x_data = value["x_data"]
+                self.y_data = value["y_data"]
                 
                 # Plot the dataset if not in the graph, else change the current unsaved graph
                 if self.ifs not in self.graph_widget.plotItem.items:
@@ -2235,11 +2258,34 @@ class MainWindow(qt.QMainWindow):
 
                 # Clean up process
                 self.proc = None
+                if not self.prog.isHidden():
+                    self.prog.setVisible(False)
+                    self.prog.setValue(0)
 
                 self.load_label.setText("Up to date")
             else:
                 self.load_label.setText("Computation failed. Please try again.")
         
+    def kill_process(self):
+        """
+        A function that stops the update graph multiprocess, assuming the process needs
+        to be terminated. Stops timer and removes progress bar from view.
+
+        :param self: MainWindow object
+        """
+        # Stop timer if running
+        self.monitor_timer.stop()
+        # Check to ensure a process isn't already running, and if it is, kill it
+        if self.proc is not None:
+            self.load_label.setText("Cancelling...")
+            qt.QApplication.processEvents() # Force a screen update to render the status label
+            self.proc.terminate() # Send the SIGTERM signal to the process
+            self.proc.join()
+            # Remove progress bar if visible
+            if not self.prog.isHidden():
+                    self.prog.setVisible(False)
+                    self.prog.setValue(0)
+            self.proc = None
 class StableTable(qt.QTableWidget):
     """
     Sets up a safe extension of PyQt6's QTableWidget that disables all potentially problematic keyboard

@@ -11,7 +11,7 @@ import os
 
 # --- FIT FILE PARAMETERS ---
 # Simulation params
-DATA_FILE = "ering.csv"
+DATA_FILE = "gring.csv"
 MODEL = "mie" # Set to either mie (for Mie scattering) or hg (for Henyey-Greenstein function)
 ALTITUDE = None # Set to an altitude value in km if you want to curve-fit to altitude-dependent reflectance-vs-wavelength data. Not functional currently.
 
