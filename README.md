@@ -31,7 +31,7 @@ After the first installation, only `python3 analysis_main.py` needs to be run fr
 
 ## Navigating the Home Screen
 Once the main program has been launched, a PyQt5 window will appear as shown below, and a sample graph will quickly load onto the displayed graphing window:
-![ECSPA Home](assets/ECSPA_home.jpeg)
+![ECSPA Home](assets/ECSPA_home.png)
 The various buttons and fields available in this interface can be used to save, clear, or alter the output and initial conditions of the displayed plot and are discussed in further detail below.
 ### Reflectance vs. Wavelength
 This is the plot mode button, cycling between "Reflectance vs. Wavelength" (for plotting spectra at a range of wavelengths), "Surface Reflectance vs. Wavelength" (for plotting the albedo of surface deposits of particles at a range of wavelengths), and "Reflectance vs. Angle" (for plotting spectra as a function of the scattering angle or phase angle at which the material is observed). Cycling between these modes can result in few to significant shifts in the GUI, as each mode only shows the input fields relevant to the spectra being displayed. **Clicking this buttion with data currently in the graphing window will halt any pending graph updates and clear the window.**
