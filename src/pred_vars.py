@@ -2,8 +2,8 @@
 A helper file containing all data relating to Clipper's instruments and the named size distributions available for
 selection in the GUI.
 
-Authors: Parker A. Zaemann, Matthew M. Hedman
-Date: 17 Jul 2026
+Authors: Matthew M. Hedman, Parker A. Zaemann
+Date: 14 August 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """
@@ -16,7 +16,7 @@ INSTRUMENTS = {'NAC': [0.358, 1.050], 'WAC': [0.370, 1.050], 'MISE': [0.8, 5], '
 # Size Comparable to a Wavelength: A New Semi-Empirical Theory and Its Application to Troposhperic Aerosols" (1979)
 # For all figures, use 5 um wavelength.
 # Use CUBES material for figure 3, OCTAHEDRA for figure 6, and CONCAVE_CONVEX for figure 7
-SIZEDISTS = {'G-ring-like': [[2.6882, 5.4109, 2, 1.5733, 3.1147, 0.4049], [0.46, 0.98, 0.54, 0.34]], 'E-ring-like': [[1, 7.6281, 4, 1, 8.3633, 4.4008], [0.91, 0.87, 0.09, 0.10]], 'PC Cubes Fig 3': [[1.51197195937, 14.1647899352, 2.5, 1.3, 1.5, 4], [0, 0, 0, 0]], 'PC Octahedrons Fig 6': [[4.67119757975, 7.24154991068, 2.5, 1.1, 2, 8], [0, 0, 0, 0]], 'PC Concave-Convex Fig 7': [[4.69507082121, 14.1647899352, 2.5, 1.3, 4, 10], [0, 0, 0, 0]], 'Simplified Case': [[8, 12, 4, 1.3, 1.5, 4]]}
+SIZEDISTS = {'G-ring-like': [[3.1750, 6.7172, 1.8341, 1.0056, 2.5474, 14.5100], [0.46, 0.98, 0.54, 0.34]], 'E-ring-like': [[1, 7.6281, 4, 1, 8.3633, 4.4008], [0.91, 0.87, 0.09, 0.10]], 'PC G-ring-like': [[3.1593, 7.5069, 1.8799, 1, 3.2269, 5.6585], [0.46, 0.98, 0.54, 0.34]], 'PC E-ring-like': [[1, 7.6281, 4, 1, 8.3633, 4.4008], [0.91, 0.87, 0.09, 0.10]], 'PC Cubes Fig 3': [[1.51197195937, 14.1647899352, 2.5, 1.3, 1.5, 4], [0, 0, 0, 0]], 'PC Octahedrons Fig 6': [[4.67119757975, 7.24154991068, 2.5, 1.1, 2, 8], [0, 0, 0, 0]], 'PC Concave-Convex Fig 7': [[4.69507082121, 14.1647899352, 2.5, 1.3, 4, 10], [0, 0, 0, 0]], 'Simplified Case': [[8, 12, 4, 1.3, 1.5, 4]]}
 
 # Other distribution parameters
 NSIZE=['Linear', 51] # Number of sizes to include in Mie distribution (resolution)

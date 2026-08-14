@@ -4,8 +4,8 @@ Greenstein function for a given dataset of reflectance vs. scattering angle, out
 all optimized fit parameters and a graph of the best-fit curve superimposed on the original
 dataset.
 
-Authors: Parker A. Zaemann, Matthew M. Hedman
-Date: 17 Jul 2026
+Authors: Matthew M. Hedman, Parker A. Zaemann
+Date: 14 August 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     graph_dir = utils.create_dirpath("scatterfit_main")
 
     # Extract original angles and reflectances from data path
-    theta1_orig, reflectances_orig = utils.get_data(vars.DATA_PATH)
+    theta1_orig, reflectances_orig, _ = utils.get_data(vars.DATA_PATH)
 
     # Sort and zip in case of scrambled values
     sorted_pairs = sorted(zip(theta1_orig, reflectances_orig))
@@ -136,8 +136,8 @@ if __name__ == "__main__":
                 de_bounds,
                 args=(valid_degs, np.log10(valid_reflectances)),
                 strategy='best1bin',
-                maxiter=1000,
-                popsize=15, # Increase if it struggles to find the global minimum
+                maxiter=10000,
+                popsize=30, # Increase if it struggles to find the global minimum
                 tol=1e-3,
                 mutation=(0.5, 1.0),
                 recombination=0.7

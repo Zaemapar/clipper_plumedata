@@ -2,8 +2,8 @@
 A helper file containing all data necessary to compute the best-fit Mie distribution or
 Henyey-Greenstein function for a given dataset.
 
-Authors: Parker A. Zaemann, Matthew M. Hedman
-Date: 17 Jul 2026
+Authors: Matthew M. Hedman, Parker A. Zaemann
+Date: 14 August 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """
@@ -11,7 +11,7 @@ import os
 
 # --- FIT FILE PARAMETERS ---
 # Simulation params
-DATA_FILE = "gring.csv"
+DATA_FILE = "ering.csv"
 MODEL = "mie" # Set to either mie (for Mie scattering) or hg (for Henyey-Greenstein function)
 ALTITUDE = None # Set to an altitude value in km if you want to curve-fit to altitude-dependent reflectance-vs-wavelength data. Not functional currently.
 
@@ -22,17 +22,17 @@ ANGLE_UPPERBOUND = 166
 # MIE DEFAULT PARAMETERS
 # Min and max particle sizes to scan for in Mie distribution
 S_MIN = 1
-S_MAX = 10
+S_MAX = 20
 # Min and max power law to scan for in Mie distribution
-POWLAW_MIN = 2
-POWLAW_MAX = 4
+POWLAW_MIN = 1
+POWLAW_MAX = 20
 # Min and max r, G, and x0 to scan for in semi-empirical Mie distribution
 R_MIN = 1
-R_MAX = 10
+R_MAX = 20
 G_MIN = 1
-G_MAX = 10
+G_MAX = 20
 x0_MIN = 0
-x0_MAX = 10
+x0_MAX = 20
 
 NSIZE=['Linear', 51] # Number of sizes to include in distribution (resolution)
 COMP = 'Water Ice' # Composition of material. Currently only this is supported.
