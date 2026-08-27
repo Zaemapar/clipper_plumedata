@@ -1,9 +1,13 @@
 """
 A file containing various helper methods to organize and read files, perform major computations relating to
-scattering theories, or output graphs given an input dataset.
+light scattering, or output graphs given an input dataset.
+
+Throughout this program, references to 'PC80' refer to Pollack & Cuzzi's "Scattering of Nonspherical Particles of 
+Size Comparable to a Wavelength: A New Semi-Empirical Theory and Its Application to Troposhperic Aerosols" (1979).
+References to 'HG' refer to Henyey-Greenstein functions.
 
 Authors: Matthew M. Hedman, Parker A. Zaemann
-Date: 14 August 2026
+Date: 27 August 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """
@@ -53,7 +57,8 @@ def wb08read(data_path):
 
 def get_nk(wavels, comps, mixmodel='Molecular'):
     """
-    Determines complex index of refraction n + ki of a material given its composition and the incident wavelength.
+    Determines complex index of refraction n + ki of a material given its composition and a list of incident 
+    wavelengths.
 
     :param wavel: Float wavelength in microns
     :param comps: Dictionary of string compositions of material and given volume fractions
@@ -74,7 +79,7 @@ def get_nk(wavels, comps, mixmodel='Molecular'):
         except FileNotFoundError:
             raise FileNotFoundError(f"Material {comp} not supported.")
     
-        # Interpolate to given wavelength
+        # Interpolate to given wavelengths
         nxfunc=sp.interpolate.interp1d(wavex,nx)
         kxfunc=sp.interpolate.interp1d(wavex,kx)
         temp_ns.append(nxfunc(wavels))
@@ -104,7 +109,7 @@ def get_nk(wavels, comps, mixmodel='Molecular'):
             # Handle the case of an improper argument
             raise ValueError(f"Mixture model {mixmodel} not supported.")
     
-    # Full returns full array across all wavelengths
+    # Returns full arrays of ns and ks across all wavelengths
     return ns, ks
 
 def get_minmax_wavel(comp):
@@ -271,21 +276,25 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
     :param smin: Float minimum size in microns used in size distribution
     :param smax: Float maximum size in microns used in size distribution
     :param powlaw: Float power law used in size distribution
-    :param G: Float constant to use in Mie transmission equation
+    :param G: Float constant to use in Mie transmission equation. G=1 means transmission will be flat at high
+              scattering angles.
     :param r: Float ratio of the surface area of an irregular particle to the surface area of a sphere of the same 
-              volume (unitless)
-    :param x0: Float size cutoff above which to use semi-empirical methods and below which to use pure Mie 
-               (unitless)
+              volume (unitless), representative of the size distribution
+    :param x0: Float size parameter cutoff above which to use semi-empirical methods and below which to use pure 
+               Mie (unitless)
     :param theta_min: Integer lower angle bound in degrees
     :param theta_max: Integer upper angle bound in degrees
     :param wavel: Array of wavelengths in microns at which to evaluate Mie
     :param nsize: List [size mode, integer number of sizes to use in size distribution]
-    :param comps: Dictionary with keys as mixture materials and values as volume fractions of materials
-    :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'  
+    :param comps: Dictionary with keys as mixture materials and values as unitless volume fractions of materials
+    :param mixmodel: String mixture model to use, either 'Areal' or 'Molecular'. Areal means the mixture is
+                     treated as though it had particles of separate materials. Molecular means each particle is
+                     treated as though it is a homogenous mixture of each material.
     :param tau: Float allowing for optical detph tau (unitless) to be input, rather than calculated
-    :param ref_if: Float reflectance from original data (unitless) from which to calculate optical depth tau. 
+    :param ref_if: Float I/F reflectance from other data (unitless) from which to calculate optical depth tau. 
                    ref_if MUST correspond to theta_min.
-    :param section: String indicating which term of semi-empirical Mie methods to use
+    :param section: String indicating which term of semi-empirical Mie methods to use. 'Semi-Empirical Mie' uses
+                    all of them, while 'Pure Mie' uses only the Mie term.
     :param output: String indicating what to return ('Reflectance' for reflectances or 'Phase Function' for phase 
                    function)
     :param updates: List containing boolean of whether or not to print progress update fraction after each 
@@ -294,12 +303,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                  wavels. Shape (len(wavels), len(angles))
               Array for calculated optical depths (unitless) at each wavelength
     """
-    # Compute the nominal (unnormalized) particle size distribution
-    if nsize[0] == 'Linear':
-        radii=np.linspace(smin, smax, nsize[1])
-    elif nsize[0] == 'Logarithmic':
-        radii=log_dist(smin, smax, nsize[1])
-
+    # --- STARTUP PARAMETERS/BOUNDS ---
     angle_range = np.radians(np.arange(theta_min, theta_max + 1, 1)) # Range of given angles in radians
     solid_angles_degs = np.arange(0, 181, 1) # All colatitude angles in the range of solid angles, for integrals
     solid_angles = np.radians(solid_angles_degs) # All colatitude angles in radians
@@ -315,7 +319,8 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
     taus = np.zeros((len(wavels)))
 
     # Diffraction term actually doesn't depend on material or index of refraction
-    # We create a placeholder here for phase
+    # We create a placeholder here for that term's phase function, since it will be computed only during the
+    # first material's iteration
     P_large_diff_2d = np.zeros((len(wavels), len(solid_angles)))
 
     # Get the number of compositions/iterations (for progress updates)
@@ -363,6 +368,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
             elif nsize[0] == 'Logarithmic':
                 # Logarithmically spaced distributions will have linear spacing for small sizes and log spacing for large sizes
                 # Whatever base is used for the large sizes will be the number of sizes in the small size array.
+                # This is so that we don't have to piecemeal different log spacings together
                 if n_small_size > 0:
                     small_radii = np.linspace(smin, min(x0, max_size) * wavel / (2*np.pi), nsize[1])
                 if n_large_size > 0:
@@ -384,11 +390,11 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
             n, k = ns[j], ks[j]
             m = complex(n, k)
 
-            # Calculating a ratio of the size of the large particle regime vs the size of the small particle regime
-            # See Pollack & Cuzzi, 1980, eq. 7d
+            # Calculating a ratio of the size of the large particle regime to the size of the small particle regime
+            # See PC80 eq. 7d
             F = np.trapz(large_dist * np.pi * large_sizes**2, large_sizes) / np.trapz(sizedist * np.pi * sizeparams**2, sizeparams)
 
-            # First get Qs across all sizes for constant calculations later
+            # First get Q coefficients across all sizes for constant calculations later
             Q_full = [PyMie.MieQ(m, wavel*1000, diameter, asDict=True) for diameter in diameters*1000]
             # Then split them up into small and large sizes
             Q_small = Q_full[:n_small_size]
@@ -397,7 +403,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
             # --- SMALL REGIME PARTICLES ---
             # Default parameters in case there are no small particles
             SU_small = np.zeros_like(solid_angles)
-            P_small = np.zeros_like(angle_range)
+            P_small = np.zeros_like(angle_range) # We do have to declare the phase function and its solid integral/initial point before computing because those variables are used later even if there are no small sizes.
             solid_int_Ps = 0
             Ps0 = 0
             Q_SS = 0
@@ -412,7 +418,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                     # Takes wavelength & diameters in nanometers, so need to convert from microns
                     # Note how this shortcut allows us to calculate the scattering intensity only within the angle range
                     # This is because reflectance doesn't have to be normalized by integrating over all solid angles
-                    theta1, SL, SR, SU_small = PyMie.SF_SD(m, wavel*1000, small_diameters*1000, small_dist,
+                    theta1, _, _, SU_small = PyMie.SF_SD(m, wavel*1000, small_diameters*1000, small_dist,
                                             minAngle=theta_min, maxAngle=theta_max,
                                             angularResolution=1.0, space='theta')
                         
@@ -433,7 +439,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                         # Otherwise, we use a fixed tau for all wavelengths
                         tau_wavel = tau
 
-                    if output == 'Intensity':
+                    if output == 'Intensity': # Intensity means use SU; no scaling needed
                         # Append to relevant arrays
                         output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * SU_small
                         taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau_wavel
@@ -443,7 +449,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                         # same units as sizedists, meaning we have square nanometers over cubic microns,
                         # which is the same as inverse meters. Our units thus cancel assuming tau and 
                         # reflectances are unitless.
-                        # If this is being curve-fit to data and tau is input as None, this should make
+                        # If this model is being curve-fit to data and tau is input as None, this should make
                         # the output reflectance and input reflectance match at theta=angle_range[0]
                         refl=np.asarray(SU_small)*(wavel*1000)**2/(4*np.pi)*tau_wavel/bext
 
@@ -470,6 +476,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                 integral_SU_small = np.sum(Q_sca_small * np.pi * (small_diameters/2)**2 * small_dist) * (np.pi / wavel**2)
                 C_S = 1 / integral_SU_small if integral_SU_small != 0 else 1.0
 
+                # Get the initial point, the integral over all solid angles, and the full phase function
                 Ps0 = C_S * SU_small_0[0]
                 solid_int_Ps = 4 * np.pi
                 P_small = C_S * np.asarray(SU_small)
@@ -480,12 +487,12 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                 if Q_s_denom != 0: # We only update small scattering/absorption efficiencies if denominator is nonzero. Otherwise, Q_SS and Q_SA are left at 0 (a zero denominator means the integral didn't have enough points)
                     # Small scattering efficiency as a function of size parameter
                     Q_ssx = [q['Qsca'] for q in Q_small]
-                    # Total small particle Mie scattering efficiency, P&C eq. 6b (They said to reuse it for small particle scattering)
+                    # Total small particle Mie scattering efficiency, PC80 eq. 6b (They said to reuse it for small particle scattering)
                     Q_SS = np.trapz(Q_ssx * small_dist * np.pi * small_sizes**2, small_sizes) / Q_s_denom
 
                     # Small absorption efficiency as a function of size parameter
                     Q_sax = [q['Qabs'] for q in Q_small]
-                    # Total small particle Mie absorption efficiency, P&C eq. 6b (They said to reuse it for small particle absorption)
+                    # Total small particle Mie absorption efficiency, PC80 eq. 6b (They said to reuse it for small particle absorption)
                     Q_SA = np.trapz(Q_sax * small_dist * np.pi * small_sizes**2, small_sizes) / Q_s_denom
 
             # Default parameters in case there are no large particles
@@ -498,19 +505,18 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                 if Q_l_denom != 0: # We only update Q_LS and Q_LA if denominator is nonzero. Otherwise, leave them at 0
                     # Large cattering efficiency as a function of size parameter
                     Q_lsx = [q['Qsca'] for q in Q_large]
-
-                    # Total large particle Mie scattering efficiency, P&C eq. 6b
+                    # Total large particle Mie scattering efficiency, PC80 eq. 6b
                     Q_LS = np.trapz(Q_lsx * large_dist * np.pi * large_sizes**2, large_sizes) / Q_l_denom
                     # Large absorption efficiency as a function of size parameter
                     Q_lax = [q['Qabs'] for q in Q_large]
-                    # Total large particle Mie absorptionefficiency, P&C eq. 6b (They said to reuse it for absorption)
+                    # Total large particle Mie absorptionefficiency, PC80 eq. 6b (They said to reuse it for absorption)
                     Q_LA = np.trapz(Q_lax * large_dist * np.pi * large_sizes**2, large_sizes) / Q_l_denom
 
                 # --- LARGE REGIME: DIFFRACTION ---
                 # We only compute the diffraction regime for one material
                 if 'Semi-Empirical' in section or 'Diffraction' in section:
                     if i == 0:
-                        # Since irregular particles have larger cross-sectional radii than their equivalent volume spheres, must multiply by sqrt(r)
+                        # Since irregular particles have larger cross-sectional radii than their equivalent volume spheres, must multiply sizes by sqrt(r) according to PC80
                         rescaled_sizes = large_sizes * np.sqrt(r)
                         # We also need to rescale size distributions for later
                         rescaled_sizedist=(large_diameters/2)**(-1*powlaw)
@@ -522,7 +528,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                         theta_2d = np.concatenate((theta_2d_small, theta_2d_large))
                         sizes_2d = rescaled_sizes[np.newaxis, :]
 
-                        # Create the z variable for the Bessel function (z = x*sin(theta), Pollack & Cuzzi eqn. 2b)
+                        # Create the z variable for the Bessel function (z = x*sin(theta), PC80 eq. 2b)
                         # Note this assumption is only valid when sin(theta) ~ theta, so we add only the part where that assumption is true (theta < pi/4)
                         z_small = sizes_2d * np.sin(theta_2d_small)
                         # J.R. Hodkinson and I. Greenleaves (1962) state that at large angles of scatter where theta !~ sin(theta), z=x*theta
@@ -530,13 +536,13 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                         # Stack so that z_2d is a 2d array of shape (len(solid_angles), len(rescaled_sizes))
                         z_2d = np.vstack((z_small, z_large))
 
-                        # Pollack & Cuzzi use a first-order Bessel function in calculating the diffraction
+                        # PC80 uses a first-order Bessel function in calculating the diffraction
                         # However there is an indeterminate at theta=0, so the L'Hospital's rule limit must be applied
                         with np.errstate(divide='ignore', invalid='ignore'):
                             j1_term = sp.special.j1(z_2d) / z_2d # This makes another 2d array of same shape as z_2d
                             j1_term[z_2d == 0] = 0.5  # L'Hopital's rule limit as stated by Hodkinson and Greenleaves
 
-                        # Calculating unnormalized phase function for diffraction as reported in Hodkinson and Greenleaves, 1963
+                        # Calculating unnormalized phase function for diffraction as reported in Hodkinson and Greenleaves, 1962
                         # Again, creates a 2d array of same shape as z_2d
                         d_x_unnormalized = (sizes_2d**2) * (2 * j1_term)**2 * 0.5 * (1 + np.cos(theta_2d)**2)
 
@@ -547,17 +553,17 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                         # Getting the integrand over which to integrate for all rescaled sizes
                         # Again, creates a 2d array of same shape as z_2d. Column axis (len(sizes)) gets multiplied by sizes_2d^2 again and then by a row vector for sizedists
                         # Because sizes_2d and sizedists are row vectors with the same length as sizes_2d, they get copied for each row across d_x_unnormalized
-                        # Note that this deviates from the methods of Pollack & Cuzzi. This is an experimental modification made by M. Hedman.
+                        # Note that this deviates from the methods of PC80. This is an experimental modification made by M. Hedman.
                         integrand = Q_lex[np.newaxis, :]**2/16/tau_large * d_x_unnormalized * np.pi * sizes_2d**2 * rescaled_sizedist[np.newaxis, :]
                         # Integration takes place
                         # We integrate over axis 1, the size axis. Result is a list with shape len(angles)
-                        # The array is already normalized
+                        # Prof. Hedman's modification means that the array is already normalized (if it is going into the full semi-empirical theory)
                         P_large_diff_2d[j] = np.trapz(integrand, rescaled_sizes, axis=1)
 
-                        Pd0 = P_large_diff_2d[j][0] # Get the first element, for normalizing P_T
+                        Pd0 = P_large_diff_2d[j][0] # Get the first element for normalizing P_T
                         solid_int_Pd = np.trapz(2*np.pi*P_large_diff_2d[j]*np.sin(solid_angles), solid_angles) # Get the integral over all solid angles
                     if 'Diffraction' in section:
-                        # Normalize so that integral over all solid angles equals 4*pi
+                        # Normalize so that integral over all solid angles equals 4*pi if the diffraction term is requested in isolation
                         C_D = 4 * np.pi / solid_int_Pd
                         # Get the diffraction phase function between valid angles
                         P_large_diff = C_D * P_large_diff_2d[j][solid_min_idx:solid_max_idx + 1]
@@ -570,17 +576,18 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                 if 'Semi-Empirical' in section or 'External Reflection' in section:
                     # Placeholder array to hold external reflection component
                     P_large_extref_unsliced = np.zeros_like(solid_angles)
-                    m_bar_sqr = np.abs(m)**2 # Taking the magnitude of the index of refraction squared
+                    m_bar_sqr = np.abs(m)**2 # Taking the magnitude of the index of refraction squared, useful in the following calculations
+                    nan_idxs = (m_bar_sqr - 1 + np.sin(solid_angles / 2)**2) < 0 # Sometimes the values under the square roots in the following calculations are negative and need to be handled separately
+                    
                     # Get the unnormalized phase function for external reflection, which is a function of the solid angle theta
-                    nan_idxs = (m_bar_sqr - 1 + np.sin(solid_angles / 2)**2) < 0
-                    # No normalization is needed because it cancels out in the f
+                    # The array is already normalized (if it is going into the full semi-empirical theory)
                     P_large_extref_unsliced[nan_idxs] = 1 # Clamp the m_bar_sqr - 1 + np.sin(solid_angles / 2)**2 to 0 to avoid negative square root. This yields an intensity of 1 (see Ellison & Peetz, 1959, section 3)
                     P_large_extref_unsliced[~nan_idxs] = 0.5*((np.sin(solid_angles[~nan_idxs] / 2) - (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5)/(np.sin(solid_angles[~nan_idxs] / 2) + (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5))**2 + 0.5 * ((m_bar_sqr * np.sin(solid_angles[~nan_idxs] / 2) - (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5)/(m_bar_sqr * np.sin(solid_angles[~nan_idxs] / 2) + (m_bar_sqr - 1 + np.sin(solid_angles[~nan_idxs] / 2)**2)**0.5))**2
 
                     Pr0 = P_large_extref_unsliced[0] # Get the first element, for normalizing P_T later
                     solid_int_Pr = np.trapz(2*np.pi*P_large_extref_unsliced*np.sin(solid_angles), solid_angles) # Get the integral over all solid angles
                     if 'External Reflection' in section:
-                        # Normalize so that integral over all solid angles equals 4*pi
+                        # Normalize so that integral over all solid angles equals 4*pi if the external reflection term is requested in isolation
                         C_R = 4 * np.pi / solid_int_Pr
                         # Get the external reflection phase function between valid angles
                         P_large_extref = C_R * P_large_extref_unsliced[solid_min_idx:solid_max_idx + 1]
@@ -599,6 +606,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
 
                 # --- LARGE REGIME: TRANSMISSION ---
                 if 'Semi-Empirical' in section or 'Transmission' in section:
+                    # This calculation computes the transmitted intensity of light, derived from PC80 eq. 5a
                     b = -2 * np.log(G) / np.pi # np.log is the natural log
                     P_large_trans_unsliced = np.e**(1 + b * solid_angles)
 
@@ -611,7 +619,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                                 updates[1].put((i*n_wavels + j + 1)/n_iterations) # Put the total progress so far in the multiprocessing queue
                             continue
 
-                        # Otherwise, normalize so that integral over all solid angles equals 4*pi
+                        # Otherwise, normalize so that integral over all solid angles equals 4*pi if the transmission term is requested in isolation
                         C_T = 1 / np.trapz(0.5*P_large_trans_unsliced*np.sin(solid_angles), solid_angles)
                         # Get the transmission phase function between valid angles
                         P_large_trans = C_T * P_large_trans_unsliced[solid_min_idx:solid_max_idx + 1]
@@ -620,11 +628,12 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                         C_T = (Q_LS - np.trapz(0.5*P_large_diff_2d[j]*np.sin(solid_angles), solid_angles) - np.trapz(0.5*P_large_extref_unsliced*np.sin(solid_angles), solid_angles)) / np.trapz(0.5*P_large_trans_unsliced*np.sin(solid_angles), solid_angles)
                         P_large_trans_normalized = C_T * P_large_trans_unsliced # Scaling by its normalization constant
                         # Get the first value of this array, as well as the integral over all solid angles, for further normalization later
-                        Pt0 = P_large_trans_normalized[0]
-                        solid_int_Pt = np.trapz(2*np.pi*P_large_trans_normalized*np.sin(solid_angles), solid_angles)
+                        Pt0 = P_large_trans_normalized[0] # Get the first value of the transmission array
+                        solid_int_Pt = np.trapz(2*np.pi*P_large_trans_normalized*np.sin(solid_angles), solid_angles) # Get the integral over all solid angles of the transmission array
                         P_large_trans = P_large_trans_normalized[solid_min_idx:solid_max_idx + 1] # Slice with appropriate angle range
+                        # NOTE THAT THIS NORMALIZATION IS ONLY A PARTIAL NORMALIZATION. P_T will be normalized further elsewhere.
 
-            # Note: Now we have to compute reflectances as if the whole thing were pure Mie. In order to normalize the transmission component, the pure Mie normalized peak and the semi-empirical normalized peak must be set equal
+            # Now we have to compute reflectances as if the whole thing were pure Mie. In order to normalize the transmission component fully, the pure Mie normalized peak and the semi-empirical normalized peak must be set equal
             if 'Semi-Empirical' in section:
                 # Calculate scattering intensity over ALL sizes ONLY at theta=0
                 _, _, _, SU_small_full_0 = PyMie.SF_SD(m, wavel*1000, diameters*1000, sizedist,
@@ -638,22 +647,25 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                 
                 # To get the phase function peak, normalize the scattering intensity at theta=0
                 Ps0_full = C_S_full * SU_small_full_0[0]
-                solid_int_Ps_full = 4 * np.pi
+                solid_int_Ps_full = 4 * np.pi # We have normalized the phase function such that this integral equals 4*pi
                 
-            # Total efficiencies between both regimes, weighted by ratio of large to small particles
-            Q_star_S = Q_LS * F * r + Q_SS * (1 - F) # Total scattering efficiency, P&C eq. 7a
-            Q_star_A = (Q_LA * F) * (r if 2*n*np.mean(large_sizes) > 1 else 1) + Q_SA * (1 - F) # Total absorption efficiency, P&C eq. 7b. They mention a case where the first term needs to be multiplied by r if 2nx>1. I take that to mean average large x.
-            Q_star_E = Q_star_S + Q_star_A # Total extinction efficiency, P&C eq. 7c
+            # Total efficiencies between both small and large regimes, weighted by ratio of large to small particles
+            Q_star_S = Q_LS * F * r + Q_SS * (1 - F) # Total scattering efficiency, PC80 eq. 7a
+            Q_star_A = (Q_LA * F) * (r if 2*n*np.mean(large_sizes) > 1 else 1) + Q_SA * (1 - F) # Total absorption efficiency, PC80 eq. 7b. They mention a case where the first term needs to be multiplied by r if 2nx>1. I take x to mean average large x.
+            Q_star_E = Q_star_S + Q_star_A # Total extinction efficiency, PC80 eq. 7c
 
-            # Weights for small and large terms, according to P&C
+            # Weights for small and large terms, according to PC80 eq. 8
             P_small_fact = (1 - F) * Q_SS / Q_star_S
             P_large_fact = r * F * Q_LS / Q_star_S
 
-            # Compute the combined phase function, P&C eq. 8.
+            # Compute the combined phase function, PC80 eq. 8.
+            # First we declare a placeholder
             P_star = np.zeros_like(angle_range)
+
             # Add on small size components as appropriate
             if n_small_size > 0:
                 P_star += P_small * P_small_fact
+
             # Add on large size components as appropriate
             if n_large_size > 0:
                 if 'Semi-Empirical' in section or 'Diffraction' in section:
@@ -663,7 +675,7 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                 if 'Semi-Empirical' in section or 'Transmission' in section:
                     # Now here is where normalization of transmission gets tricky. In the semi-empirical method, we want the normalized peak of the phase function to equal that of pure Mie
                     if 'Semi-Empirical' in section:
-                        # We have to weight the phase function values with their weights in the overall phase function (because small and large terms are mixed, they don't cancel out)
+                        # We have to multiply the component phase function values by their weights in the overall phase function (because small and large terms are mixed, they don't cancel out)
                         Ps0, solid_int_Ps = Ps0*P_small_fact, solid_int_Ps*P_small_fact
                         Pd0, Pr0, Pt0, solid_int_Pd, solid_int_Pr, solid_int_Pt = P_large_fact*Pd0, P_large_fact*Pr0, P_large_fact*Pt0, solid_int_Pd*P_large_fact, solid_int_Pr*P_large_fact, solid_int_Pt*P_large_fact
                         
@@ -673,15 +685,15 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
 
                         # Then we calculate the k value
                         kmie = (Psdr0 - solid_int_Psdr*Ps0_full/solid_int_Ps_full)/(solid_int_Pt*Ps0_full/solid_int_Ps_full - Pt0)
-
                     else:
                         kmie = 1 # Set to 1 as default multiplicative identity
                     
-                    # Add on transmission term
+                    # Add on transmission term, fully normalized
                     P_star += kmie * P_large_fact * P_large_trans
 
             # Now check the output and calculate phase or reflectance if requested
             if output == 'Phase Function':
+                # Keep as-is
                 output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * P_star
             elif output == 'Reflectance':
                 omega_0 = Q_star_S / Q_star_E
@@ -693,15 +705,16 @@ def angle_mie_reflectances(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=va
                 else:
                     tau_wavel = tau
 
-                # Calculate reflectance using scattering data
+                # Calculate reflectance using phase function
                 refl = 0.25 * omega_0 * P_star * tau_wavel
+                # Pass to outputs
                 output_arr[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * refl
                 taus[j] += (float(comps[mat_idx]) if mixmodel == 'Areal' else 1) * tau_wavel
 
             if updates[0]:
                 updates[1].put((i*n_wavels + j + 1)/n_iterations) # Put the total progress so far in the multiprocessing queue
 
-    # Return a reflectances/phase functions as well as tau
+    # Return reflectances/intensities/phase function as well as tau, both as Python lists
     return output_arr.tolist(), taus.tolist()
 
 def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_min=vars.ANGLE_LOWERBOUND, theta_max=vars.ANGLE_UPPERBOUND, wavels=[vars.WAVEL], nsize=vars.NSIZE, comps={vars.COMP: 1}, mixmodel='Molecular', tau=None, ref_if=0, section='Semi-Empirical Mie', output='Reflectance', updates=[False, None]):
@@ -825,7 +838,7 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
             m = complex(n, k)
 
             # Calculating a ratio of the size of the large particle regime vs the size of the small particle regime
-            # See Pollack & Cuzzi, 1980, eq. 7d
+            # See PC80 eq. 7d
             F = np.trapz(large_dist * np.pi * large_sizes**2, large_sizes) / np.trapz(sizedist * np.pi * sizeparams**2, sizeparams)
 
             # --- SMALL REGIME PARTICLES ---
@@ -908,12 +921,12 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
                 Q_small = [PyMie.MieQ(m, wavel*1000, diameter, asDict=True) for diameter in small_diameters*1000]
                 # Small scattering efficiency as a function of size parameter
                 Q_ssx = [q['Qsca'] for q in Q_small]
-                # Total small particle Mie scattering efficiency, P&C eq. 6b (They said to reuse it for small particle scattering)
+                # Total small particle Mie scattering efficiency, PC80 eq. 6b (They said to reuse it for small particle scattering)
                 Q_SS = np.trapz(Q_ssx * small_dist * np.pi * small_sizes**2, small_sizes) / Q_s_denom
 
                 # Small absorption efficiency as a function of size parameter
                 Q_sax = [q['Qabs'] for q in Q_small]
-                # Total small particle Mie absorption efficiency, P&C eq. 6b (They said to reuse it for small particle absorption)
+                # Total small particle Mie absorption efficiency, PC80 eq. 6b (They said to reuse it for small particle absorption)
                 Q_SA = np.trapz(Q_sax * small_dist * np.pi * small_sizes**2, small_sizes) / Q_s_denom
 
             # Default parameters in case there are no large particles (diffraction arrays are declared earlier)
@@ -935,12 +948,12 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
 
                 # Large cattering efficiency as a function of size parameter
                 Q_lsx = [q['Qsca'] for q in Q_large]
-                # Total large particle Mie scattering efficiency, P&C eq. 6b
+                # Total large particle Mie scattering efficiency, PC80 eq. 6b
                 Q_LS = np.trapz(Q_lsx * large_dist * np.pi * large_sizes**2, large_sizes) / Q_l_denom
 
                 # Large absorption efficiency as a function of size parameter
                 Q_lax = [q['Qabs'] for q in Q_large]
-                # Total large particle Mie absorptionefficiency, P&C eq. 6b (They said to reuse it for absorption)
+                # Total large particle Mie absorptionefficiency, PC80 eq. 6b (They said to reuse it for absorption)
                 Q_LA = np.trapz(Q_lax * large_dist * np.pi * large_sizes**2, large_sizes) / Q_l_denom
 
                 # --- LARGE REGIME: DIFFRACTION ---
@@ -959,7 +972,7 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
                         theta_2d = np.concatenate((theta_2d_small, theta_2d_large))
                         sizes_2d = rescaled_sizes[np.newaxis, :]
 
-                        # Create the z variable for the Bessel function (z = x*sin(theta), Pollack & Cuzzi eqn. 2b)
+                        # Create the z variable for the Bessel function (z = x*sin(theta), PC80 eq. 2b)
                         # Note this assumption is only valid when sin(theta) ~ theta, so we add only the part where that assumption is true (theta < pi/4)
                         z_small = sizes_2d * np.sin(theta_2d_small)
                         # J.R. Hodkinson and I. Greenleaves (1962) state that at large angles of scatter where theta !~ sin(theta), z=x*theta
@@ -967,7 +980,7 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
                         # Stack so that z_2d is a 2d array of shape (len(solid_angles), len(rescaled_sizes))
                         z_2d = np.vstack((z_small, z_large))
 
-                        # Pollack & Cuzzi use a first-order Bessel function in calculating the diffraction
+                        # PC80 uses a first-order Bessel function in calculating the diffraction
                         # However there is an indeterminate at theta=0, so the L'Hospital's rule limit must be applied
                         with np.errstate(divide='ignore', invalid='ignore'):
                             j1_term = sp.special.j1(z_2d) / z_2d # This makes another 2d array of same shape as z_2d
@@ -996,7 +1009,7 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
                         SU_large_diff_2d[j] = SU_large_diff[solid_min_idx:solid_max_idx+1]
 
                     if 'Semi-Empirical' in section:
-                        Q_D = 1 # Diffraction efficiency according to Pollack & Cuzzi
+                        Q_D = 1 # Diffraction efficiency according to PC80
                     else: # If 'Mie Diffraction'
                         Q_D = Q_LS # Transmission term will take up entire phase function
                         # For intensity, we already have the output array; we can just append that and skip everything else
@@ -1023,7 +1036,7 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
                     P_large_extref = (C_R * np.asarray(SU_large_extref))[solid_min_idx:solid_max_idx+1]
                     
                     if 'Semi-Empirical' in section:
-                        Q_R = 1 / C_R # External reflection efficiency according to Pollack & Cuzzi, eq. 4
+                        Q_R = 1 / C_R # External reflection efficiency according to PC80 eq. 4
                     else: # If 'Mie External Reflection'
                         Q_R = Q_LS # Transmission term will take up entire phase function
                         # For intensity, we already have the output array; we can just append that and skip everything else
@@ -1048,7 +1061,7 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
                     P_large_trans = (C_T * np.asarray(SU_large_trans))[solid_min_idx:solid_max_idx+1]
 
                     if 'Semi-Empirical' in section:
-                        Q_T = Q_LS - Q_D - Q_R # Transmission efficiency according to Pollack & Cuzzi eq. 6a
+                        Q_T = Q_LS - Q_D - Q_R # Transmission efficiency according to PC80 eq. 6a
                     else: # If 'Mie Transmission'
                         Q_T = Q_LS # Transmission term will take up entire phase function
                         # For intensity, we already have the output array; we can just append that and skip everything else
@@ -1062,11 +1075,11 @@ def angle_mie_reflectances_old(smin, smax, powlaw, r=1, G=1, x0=np.inf, theta_mi
                             continue
 
             # Total efficiencies between both regimes, weighted by ratio of large to small particles
-            Q_star_S = Q_LS * F * r + Q_SS * (1 - F) # Total scattering efficiency, P&C eq. 7a
-            Q_star_A = (Q_LA * F) * (r if 2*n*np.mean(large_sizes) > 1 else 1) + Q_SA * (1 - F) # Total absorption efficiency, P&C eq. 7b. They mention a case where the first term needs to be multiplied by r if 2nx>1. I take that to mean average large x.
-            Q_star_E = Q_star_S + Q_star_A # Total extinction efficiency, P&C eq. 7c
+            Q_star_S = Q_LS * F * r + Q_SS * (1 - F) # Total scattering efficiency, PC80 eq. 7a
+            Q_star_A = (Q_LA * F) * (r if 2*n*np.mean(large_sizes) > 1 else 1) + Q_SA * (1 - F) # Total absorption efficiency, PC80 eq. 7b. They mention a case where the first term needs to be multiplied by r if 2nx>1. I take that to mean average large x.
+            Q_star_E = Q_star_S + Q_star_A # Total extinction efficiency, PC80 eq. 7c
 
-            # Compute the combined phase function, P&C eq. 8. Note we cancel out Q_LS, avoiding 0/0 errors if Q_LS = 0
+            # Compute the combined phase function, PC80 eq. 8. Note we cancel out Q_LS, avoiding 0/0 errors if Q_LS = 0
             P_star = P_small * (1 - F) * Q_SS / Q_star_S + r * F / Q_star_S * (P_large_diff_2d[j] * Q_D + P_large_extref * Q_R + P_large_trans * Q_T)
             
             # Large absorption efficiency as a function of size parameter
