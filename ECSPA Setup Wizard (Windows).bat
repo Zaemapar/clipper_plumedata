@@ -14,7 +14,7 @@ echo Installing required packages...
 
 echo Generating launcher...
 echo @echo off > "%~dp0ecspa.bat"
-echo echo Launching ECSPA... >> "%~dp0ecpsa.bat"
+echo echo Launching ECSPA... >> "%~dp0ecspa.bat"
 :: Tell the launcher file to call analysis_main inside the src folder
 echo cd /d "%%~dp0src" >> "%~dp0ecspa.bat"
 :: Mirrors python3 analysis_main.py
