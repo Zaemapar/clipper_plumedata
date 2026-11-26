@@ -12,6 +12,8 @@ git clone https://github.com/Zaemapar/clipper_plumedata.git
 ```
 In the resulting folder, double-click the setup wizard that best suits your operating system (`ECSPA Setup Wizard (Windows).bat` for Windows, `ECSPA Setup Wizard (WSL).bat` for WSL, `ECSPA Setup Wizard (MacOS).command` for Mac) and wait for the program to finish running. All of the packages in src/requirements.txt will be installed in a virtual environment named `.venv`, and a main application launcher will be created (either `epsca.bat` or `epsca.command` depending on your operating system). Once this file has been created, double-click it to run the application.
 
+You can also launch the program from a Jupyter notebook by running `ecspa.ipynb` and using a kernel where `ipykernel` is installed. There will be a cell which upon running will install all required packages in your current kernel, as well as a cell to run the actual application.
+
 If you would prefer to launch the program from the terminal, run the following commands from outside the folder if on Windows:
 ```
 cd clipper_plumedata
