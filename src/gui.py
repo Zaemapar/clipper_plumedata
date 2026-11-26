@@ -14,7 +14,7 @@ To clarify in case of confusion, the code labels the graph mode button as "Refle
 simplicity; however, there are options to change the y-axis output to something other than reflectance.
 
 Authors: Matthew M. Hedman, Parker A. Zaemann
-Date: 27 August 2026
+Date: 25 November 2026
 Source: https://github.com/Zaemapar/clipper_plumedata
 Contact: mhedman@uidaho.edu
 """
@@ -46,10 +46,8 @@ BKSHEET = """
                 selection-color: black;
             }
           """
-# Set up a queue to get the information from the graph-plotting subprocess when it is done
-result_queue = mp.Queue()
 
-def output_graph(graphmode, sensor, comps, mixmodel, datamodel, fitmodel, param, tau, nsizes, wavelbounds, output):
+def output_graph(graphmode, sensor, comps, mixmodel, datamodel, fitmodel, param, tau, nsizes, wavelbounds, output, result_queue):
     """
     Output x and y arrays for a plot given various input parameters and spectra-related x and y axis units
 
@@ -671,6 +669,8 @@ class MainWindow(qt.QMainWindow):
 
         # Set up a processor variable for heavy computing via subprocesses
         self.proc = None
+        # Set up a blank queue variable. Will be changed at each compute step.
+        self.result_queue = None
 
         # Create a timer to check if the subprocess is done
         self.monitor_timer = qc.QTimer()
@@ -1070,6 +1070,9 @@ class MainWindow(qt.QMainWindow):
                     self.load_label.setText("Updating...") # Status label changes to indicate loading
                     qt.QApplication.processEvents() # Force a screen update to render the status label and the box borders during computation
 
+                    # Create a queue for the computation
+                    self.result_queue = mp.Queue()
+
                     # Store previous parameters in most_recent_update to revert GUI on cancel
                     # Ensure instrument is not None before updating most_recent_update
                     if len(self.base_params) > 0 and self.base_params[-1][0] != None:
@@ -1085,8 +1088,14 @@ class MainWindow(qt.QMainWindow):
                         self.proc.terminate() # Send the SIGTERM signal to the process
                         self.proc.join()
 
+                    # Show progress bar to assure user code is updating
+                    if self.prog.isHidden():
+                        self.prog.setVisible(True)
+                        self.cancel.setVisible(True)
+                    self.prog.setValue(0) # Start at 0% complete
+                        
                     # Set up a multiprocessing process to do the heavy calculations on a separate core
-                    self.proc = mp.Process(target=output_graph, args=(self.graphmode, self.latest_params[0], self.latest_params[1], self.latest_params[2], [self.latest_params[3], self.latest_params[4], self.latest_params[5], self.latest_params[6], self.latest_params[7], self.latest_params[8]], self.latest_params[9], (float(self.latest_params[12][0]) if 'Phase Angle' not in self.input_label.currentText() else 180 - float(self.latest_params[12][0])), self.latest_params[11], self.latest_params[10], (self.comp_min_wavel[1], self.comp_max_wavel[1]), [self.x_axis.currentText(), self.y_axis.currentText()]))
+                    self.proc = mp.Process(target=output_graph, args=(self.graphmode, self.latest_params[0], self.latest_params[1], self.latest_params[2], [self.latest_params[3], self.latest_params[4], self.latest_params[5], self.latest_params[6], self.latest_params[7], self.latest_params[8]], self.latest_params[9], (float(self.latest_params[12][0]) if 'Phase Angle' not in self.input_label.currentText() else 180 - float(self.latest_params[12][0])), self.latest_params[11], self.latest_params[10], (self.comp_min_wavel[1], self.comp_max_wavel[1]), [self.x_axis.currentText(), self.y_axis.currentText()], self.result_queue))
                     self.proc.start()
                     self.monitor_timer.start()
 
@@ -2336,7 +2345,7 @@ class MainWindow(qt.QMainWindow):
         :param self: MainWindow object
         """
         try:
-            value = result_queue.get_nowait() # Get whatever is in the result queue at this moment
+            value = self.result_queue.get_nowait() # Get whatever is in the result queue at this moment
         except Exception:
             value = None # If the queue is empty
         if isinstance(value, float): # A float is returned, that is a progress update
@@ -2415,6 +2424,7 @@ class MainWindow(qt.QMainWindow):
             self.prog.setVisible(False)
             self.cancel.setVisible(False)
         self.proc = None
+        self.result_queue = None
 
         if rst_gui:
             # Reset the GUI to the state it was previously
